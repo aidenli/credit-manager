@@ -65,6 +65,7 @@ func execute(raw []byte) ([]byte, error) {
 		return errorEnvelope("limit_rejected", err.Error()), nil
 	}
 	svc.TrackAuthCapture(reservation.ID, plan.Model, req.Model)
+	defer func() { _ = svc.FinishExecution(ctx, reservation.ID) }()
 	if err := admitExecutorAuth(ctx, svc, reservation.ID, req.ExecutorRequest); err != nil {
 		_ = svc.Release(ctx, reservation.ID, "auth_concurrency:"+err.Error())
 		return errorEnvelope("limit_rejected", err.Error()), nil
@@ -93,8 +94,9 @@ func execute(raw []byte) ([]byte, error) {
 	}
 	parsed := usageparse.FromResponseBody(hostBody, firstNonEmpty(req.Format, req.SourceFormat))
 	if settleErr := svc.SettleFromUsage(ctx, reservation, plan, parsed, firstNonEmpty(req.Format, req.SourceFormat), metrics); settleErr != nil {
-		// Prefer not to drop real response; attempt reserved settle already handled inside.
-		_ = settleErr
+		// Preserve the upstream response, but never silently retain a hold when
+		// the final ledger write cannot complete.
+		_ = svc.Release(ctx, reservation.ID, "settle_failed")
 	}
 	return okEnvelope(pluginapi.ExecutorResponse{Payload: hostBody, Headers: headers})
 }
@@ -144,6 +146,7 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 		return err
 	}
 	svc.TrackAuthCapture(reservation.ID, plan.Model, req.Model)
+	defer func() { _ = svc.FinishExecution(ctx, reservation.ID) }()
 	if err := admitExecutorAuth(ctx, svc, reservation.ID, req.ExecutorRequest); err != nil {
 		_ = svc.Release(ctx, reservation.ID, "auth_concurrency:"+err.Error())
 		return err
@@ -179,8 +182,10 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 	if stream.StatusCode >= 400 {
 		_ = closeHostModelStream(stream.StreamID)
 		parsed := usageparse.Result{}
-		_ = svc.SettleFromUsage(ctx, reservation, plan, parsed, req.SourceFormat,
-			usageMetricsFromStream(body, startedAt, time.Time{}, initialCompletedAt, "failed"))
+		if settleErr := svc.SettleFromUsage(ctx, reservation, plan, parsed, req.SourceFormat,
+			usageMetricsFromStream(body, startedAt, time.Time{}, initialCompletedAt, "failed")); settleErr != nil {
+			_ = svc.Release(ctx, reservation.ID, "settle_failed")
+		}
 		return fmt.Errorf("host model status %d", stream.StatusCode)
 	}
 	if strings.TrimSpace(stream.StreamID) == "" {
@@ -193,30 +198,42 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 	completedAt := time.Time{}
 	var buffer bytes.Buffer
 	maxBuffer := svc.Config().Stream.MaxBufferBytes
+	terminal := newStreamTerminalDetector(body)
 	for {
 		chunkRaw, errRead := callHost(pluginabi.MethodHostModelStreamRead, pluginapi.HostModelStreamReadRequest{StreamID: stream.StreamID})
 		if errRead != nil {
 			completedAt = time.Now()
 			parsed := parseExecutorStreamUsage(buffer.Bytes(), req)
-			_ = svc.SettleFromUsage(ctx, reservation, plan, parsed, firstNonEmpty(req.SourceFormat, req.Format),
-				usageMetricsFromStream(body, startedAt, firstChunkAt, completedAt, "failed"))
+			if settleErr := svc.SettleFromUsage(ctx, reservation, plan, parsed, firstNonEmpty(req.SourceFormat, req.Format),
+				usageMetricsFromStream(body, startedAt, firstChunkAt, completedAt, "failed")); settleErr != nil {
+				_ = svc.Release(ctx, reservation.ID, "settle_failed")
+			}
 			return errRead
 		}
 		var chunk pluginapi.HostModelStreamReadResponse
 		if err := json.Unmarshal(chunkRaw, &chunk); err != nil {
 			completedAt = time.Now()
-			_ = svc.SettleFromUsage(ctx, reservation, plan, usageparse.Result{}, req.SourceFormat,
-				usageMetricsFromStream(body, startedAt, firstChunkAt, completedAt, "failed"))
+			if settleErr := svc.SettleFromUsage(ctx, reservation, plan, usageparse.Result{}, req.SourceFormat,
+				usageMetricsFromStream(body, startedAt, firstChunkAt, completedAt, "failed")); settleErr != nil {
+				_ = svc.Release(ctx, reservation.ID, "settle_failed")
+			}
 			return err
 		}
 		if chunk.Error != "" {
 			completedAt = time.Now()
 			parsed := parseExecutorStreamUsage(buffer.Bytes(), req)
-			_ = svc.SettleFromUsage(ctx, reservation, plan, parsed, firstNonEmpty(req.SourceFormat, req.Format),
-				usageMetricsFromStream(body, startedAt, firstChunkAt, completedAt, "failed"))
+			if settleErr := svc.SettleFromUsage(ctx, reservation, plan, parsed, firstNonEmpty(req.SourceFormat, req.Format),
+				usageMetricsFromStream(body, startedAt, firstChunkAt, completedAt, "failed")); settleErr != nil {
+				_ = svc.Release(ctx, reservation.ID, "settle_failed")
+			}
 			return fmt.Errorf("%s", chunk.Error)
 		}
 		if len(chunk.Payload) > 0 {
+			if terminal.Feed(chunk.Payload) {
+				// A failed optimization must not hide completion from the client or
+				// interrupt the financial settlement performed below.
+				_ = svc.FinishExecution(ctx, reservation.ID)
+			}
 			if buffer.Len() < maxBuffer {
 				remain := min(maxBuffer-buffer.Len(), len(chunk.Payload))
 				_, _ = buffer.Write(chunk.Payload[:remain])
@@ -227,8 +244,10 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 			if err := emitPluginStreamChunk(pluginStreamID, bytes.Clone(chunk.Payload)); err != nil {
 				completedAt = time.Now()
 				parsed := parseExecutorStreamUsage(buffer.Bytes(), req)
-				_ = svc.SettleFromUsage(ctx, reservation, plan, parsed, firstNonEmpty(req.SourceFormat, req.Format),
-					usageMetricsFromStream(body, startedAt, firstChunkAt, completedAt, "cancelled"))
+				if settleErr := svc.SettleFromUsage(ctx, reservation, plan, parsed, firstNonEmpty(req.SourceFormat, req.Format),
+					usageMetricsFromStream(body, startedAt, firstChunkAt, completedAt, "cancelled")); settleErr != nil {
+					_ = svc.Release(ctx, reservation.ID, "settle_failed")
+				}
 				return err
 			}
 		}
@@ -238,8 +257,12 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 	}
 	completedAt = time.Now()
 	parsed := parseExecutorStreamUsage(buffer.Bytes(), req)
-	return svc.SettleFromUsage(ctx, reservation, plan, parsed, firstNonEmpty(req.SourceFormat, req.Format),
-		usageMetricsFromStream(body, startedAt, firstChunkAt, completedAt, "success"))
+	if err := svc.SettleFromUsage(ctx, reservation, plan, parsed, firstNonEmpty(req.SourceFormat, req.Format),
+		usageMetricsFromStream(body, startedAt, firstChunkAt, completedAt, "success")); err != nil {
+		_ = svc.Release(ctx, reservation.ID, "settle_failed")
+		return err
+	}
+	return nil
 }
 
 func parseExecutorStreamUsage(buf []byte, req rpcExecutorRequest) usageparse.Result {

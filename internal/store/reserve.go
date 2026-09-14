@@ -130,7 +130,8 @@ func (s *Store) Reserve(ctx context.Context, request ReserveRequest) (Reservatio
 	if maxConcurrent > 0 {
 		var active int64
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM reservations
-			WHERE plugin_key_id = ? AND status = 'held'`, request.PluginKeyID).Scan(&active); err != nil {
+			WHERE plugin_key_id = ? AND status = 'held'
+			AND execution_finished_at_unix_ms IS NULL`, request.PluginKeyID).Scan(&active); err != nil {
 			return Reservation{}, fmt.Errorf("count active reservations: %w", err)
 		}
 		if active >= maxConcurrent {
@@ -219,7 +220,8 @@ func (s *Store) GetKeyUsageOverview(ctx context.Context, keyID string, now time.
 		return KeyUsageOverview{}, fmt.Errorf("summarize key usage: %w", err)
 	}
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM reservations
-		WHERE plugin_key_id = ? AND status = 'held'`, keyID).Scan(&overview.ActiveReservations); err != nil {
+		WHERE plugin_key_id = ? AND status = 'held'
+		AND execution_finished_at_unix_ms IS NULL`, keyID).Scan(&overview.ActiveReservations); err != nil {
 		return KeyUsageOverview{}, fmt.Errorf("count active key reservations: %w", err)
 	}
 	nowMilli := now.UTC().UnixMilli()
@@ -311,6 +313,45 @@ func (s *Store) Release(ctx context.Context, reservationID string, reason string
 	if reservation.Status != ReservationHeld {
 		return Reservation{}, ErrReservationFinalized
 	}
+	if err := releaseHeldReservationTx(ctx, tx, reservation, reason); err != nil {
+		return Reservation{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Reservation{}, err
+	}
+	return s.GetReservation(ctx, reservationID)
+}
+
+// ReleaseHeldReservations finalizes a known set of held reservations atomically.
+// It is used only by stopped-host recovery while the writer lock is held.
+func (s *Store) ReleaseHeldReservations(ctx context.Context, reservationIDs []string, reason string) error {
+	if len(reservationIDs) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, reservationID := range reservationIDs {
+		if strings.TrimSpace(reservationID) == "" {
+			return fmt.Errorf("%w: reservation id is required", ErrInvalidArgument)
+		}
+		reservation, err := getReservation(ctx, tx, reservationID)
+		if err != nil {
+			return err
+		}
+		if reservation.Status != ReservationHeld {
+			return ErrReservationFinalized
+		}
+		if err := releaseHeldReservationTx(ctx, tx, reservation, reason); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func releaseHeldReservationTx(ctx context.Context, tx *sql.Tx, reservation Reservation, reason string) error {
 	now := nowUnixMilli()
 	result, err := tx.ExecContext(ctx, `UPDATE plugin_keys SET
 		held_amount_micro_usd = CASE WHEN held_amount_micro_usd >= ? THEN held_amount_micro_usd - ? ELSE 0 END,
@@ -318,28 +359,24 @@ func (s *Store) Release(ctx context.Context, reservationID string, reason string
 		WHERE id = ?`,
 		reservation.HeldMicroUSD, reservation.HeldMicroUSD, now, reservation.PluginKeyID)
 	if err != nil {
-		return Reservation{}, fmt.Errorf("release key hold: %w", err)
+		return fmt.Errorf("release key hold: %w", err)
 	}
 	if err := requireOneRow(result, ErrPluginKeyNotFound); err != nil {
-		return Reservation{}, err
+		return err
 	}
-	summary := reason
 	result, err = tx.ExecContext(ctx, `UPDATE reservations SET status='released', released_at_unix_ms=?,
-		settlement_summary=?, updated_at_unix_ms=? WHERE id=? AND status='held'`, now, summary, now, reservationID)
+		settlement_summary=?, updated_at_unix_ms=? WHERE id=? AND status='held'`, now, reason, now, reservation.ID)
 	if err != nil {
-		return Reservation{}, err
+		return err
 	}
 	if err := requireOneRow(result, ErrReservationFinalized); err != nil {
-		return Reservation{}, err
+		return err
 	}
 	details := fmt.Sprintf(`{"reason":%q}`, reason)
 	if err := insertAudit(ctx, tx, reservation.CallerID, reservation.PluginKeyID, reservation.ID, "quota_released", reservation.HeldMicroUSD, details, now); err != nil {
-		return Reservation{}, err
+		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return Reservation{}, err
-	}
-	return s.GetReservation(ctx, reservationID)
+	return nil
 }
 
 // ReleaseStaleReservations releases abandoned holds left by a terminated host or

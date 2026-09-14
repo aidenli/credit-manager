@@ -318,6 +318,15 @@ var migrations = []migration{
 			`ALTER TABLE plugin_keys ADD COLUMN monthly_spend_reset_at_unix_ms INTEGER`,
 		},
 	},
+	{
+		version: 20,
+		name:    "request execution completion independent of financial settlement",
+		up: []string{
+			`ALTER TABLE reservations ADD COLUMN execution_finished_at_unix_ms INTEGER`,
+			`CREATE INDEX IF NOT EXISTS reservations_executing_by_key_idx ON reservations(plugin_key_id)
+			 WHERE status = 'held' AND execution_finished_at_unix_ms IS NULL`,
+		},
+	},
 }
 
 // Migrate applies every pending migration transactionally.
