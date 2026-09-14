@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -90,17 +89,13 @@ func releaseStopped(databasePath string) (releaseResult, error) {
 }
 
 func canonicalDatabasePath(databasePath string) (string, error) {
-	databasePath = filepath.Clean(strings.TrimSpace(databasePath))
-	if databasePath == "." || databasePath == "" {
+	databasePath = strings.TrimSpace(databasePath)
+	if databasePath == "" {
 		return "", errors.New("database path is required")
 	}
-	absPath, err := filepath.Abs(databasePath)
+	resolvedPath, err := store.CanonicalDatabasePath(databasePath)
 	if err != nil {
-		return "", fmt.Errorf("resolve database path: %w", err)
-	}
-	resolvedPath, err := filepath.EvalSymlinks(absPath)
-	if err != nil {
-		return "", fmt.Errorf("resolve database symlinks: %w", err)
+		return "", err
 	}
 	info, err := os.Stat(resolvedPath)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -61,15 +62,45 @@ func LockPath(databasePath string) string {
 	return filepath.Clean(databasePath) + ".lock"
 }
 
+// CanonicalDatabasePath resolves an existing directory and an optional
+// database-file symlink. CPA and stopped-host recovery must use this same path
+// before deriving the adjacent writer lock.
+func CanonicalDatabasePath(databasePath string) (string, error) {
+	databasePath = strings.TrimSpace(databasePath)
+	if databasePath == "" {
+		return "", fmt.Errorf("%w: database path is required", ErrInvalidArgument)
+	}
+	absPath, err := filepath.Abs(filepath.Clean(databasePath))
+	if err != nil {
+		return "", fmt.Errorf("resolve database path: %w", err)
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(absPath))
+	if err != nil {
+		return "", fmt.Errorf("resolve database directory: %w", err)
+	}
+	canonical := filepath.Join(parent, filepath.Base(absPath))
+	if _, err := os.Lstat(canonical); err == nil {
+		resolved, err := filepath.EvalSymlinks(canonical)
+		if err != nil {
+			return "", fmt.Errorf("resolve database symlink: %w", err)
+		}
+		return resolved, nil
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("stat database path: %w", err)
+	}
+	return canonical, nil
+}
+
 func Open(ctx context.Context, databasePath string, options OpenOptions) (*Store, error) {
-	if strings.TrimSpace(databasePath) == "" {
-		return nil, fmt.Errorf("%w: database path is required", ErrInvalidArgument)
+	canonicalPath, err := CanonicalDatabasePath(databasePath)
+	if err != nil {
+		return nil, err
 	}
 	if options.BusyTimeout <= 0 || options.BusyTimeout > 5*time.Minute {
 		return nil, fmt.Errorf("%w: busy timeout must be greater than zero and at most 5 minutes", ErrInvalidArgument)
 	}
 
-	dsn := sqliteDSN(databasePath, options.BusyTimeout)
+	dsn := sqliteDSN(canonicalPath, options.BusyTimeout)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -93,15 +124,19 @@ func OpenLocked(ctx context.Context, databasePath string, options OpenOptions, l
 	if locker == nil {
 		return nil, fmt.Errorf("%w: file locker is required", ErrInvalidArgument)
 	}
-	lease, err := newStoreLease(databasePath)
+	canonicalPath, err := CanonicalDatabasePath(databasePath)
 	if err != nil {
 		return nil, err
 	}
-	unlock, err := acquireWriterLock(ctx, locker, databasePath, lease)
+	lease, err := newStoreLease(canonicalPath)
 	if err != nil {
 		return nil, err
 	}
-	store, err := Open(ctx, databasePath, options)
+	unlock, err := acquireWriterLock(ctx, locker, canonicalPath, lease)
+	if err != nil {
+		return nil, err
+	}
+	store, err := Open(ctx, canonicalPath, options)
 	if err != nil {
 		_ = unlock()
 		lease.release()

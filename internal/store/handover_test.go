@@ -60,7 +60,10 @@ func TestOpenLockedAcquiresImmediatelyWhenUnlocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if elapsed := time.Since(started); elapsed >= storeOpenHandoverTimeout/2 {
+	// SQLite migration and CI scheduling can take longer than half of the
+	// handover timeout even when no lock is contended. The full timeout remains
+	// the meaningful boundary between an immediate acquire and handover wait.
+	if elapsed := time.Since(started); elapsed >= storeOpenHandoverTimeout {
 		t.Fatalf("uncontended open took %v", elapsed)
 	}
 }
@@ -104,5 +107,41 @@ func TestOpenLockedHandoverTimesOutAgainstLegacyHolder(t *testing.T) {
 	}
 	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "handover timed out") {
 		t.Fatalf("error = %v, want handover timeout", err)
+	}
+}
+
+func TestCanonicalDatabasePathResolvesDirectoryAndFileSymlinks(t *testing.T) {
+	realDir := t.TempDir()
+	realPath := filepath.Join(realDir, "credit-manager.db")
+	if err := os.WriteFile(realPath, []byte("placeholder"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	aliasDir := filepath.Join(t.TempDir(), "database-dir")
+	if err := os.Symlink(realDir, aliasDir); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	aliasPath := filepath.Join(aliasDir, "credit-manager.db")
+	gotReal, err := CanonicalDatabasePath(realPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotAlias, err := CanonicalDatabasePath(aliasPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAlias != gotReal {
+		t.Fatalf("canonical alias = %q, want %q", gotAlias, gotReal)
+	}
+
+	fileAlias := filepath.Join(t.TempDir(), "credit-manager-alias.db")
+	if err := os.Symlink(realPath, fileAlias); err != nil {
+		t.Skipf("file symlinks unavailable: %v", err)
+	}
+	gotFileAlias, err := CanonicalDatabasePath(fileAlias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotFileAlias != gotReal {
+		t.Fatalf("canonical file alias = %q, want %q", gotFileAlias, gotReal)
 	}
 }

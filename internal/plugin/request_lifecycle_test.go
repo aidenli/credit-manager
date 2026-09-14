@@ -105,6 +105,68 @@ func TestStreamLifecycleCancellationBeforeReservationSkipsUpstream(t *testing.T)
 	}
 }
 
+func TestStreamLifecycleCancellationAfterBindStopsLaunch(t *testing.T) {
+	svc := newLifecycleTestService(t)
+	const requestID = "request-cancelled-after-bind"
+	trackStreamLifecycle(requestID, svc)
+	if bindStreamLifecycle(requestID, "reservation") {
+		t.Fatal("unexpected cancellation before bind")
+	}
+	completeStreamLifecycle(pluginapi.RequestCompletion{RequestID: requestID, Outcome: pluginapi.RequestCompletionCanceled})
+	if beginStreamUpstream(requestID) {
+		t.Fatal("cancellation after bind still allowed upstream launch")
+	}
+	clearStreamLifecycle(requestID)
+}
+
+func TestImageCompletionReleasesHoldWhenSettlementFails(t *testing.T) {
+	ctx := context.Background()
+	svc := newLifecycleTestService(t)
+	key, _, err := svc.MintKey(ctx, service.BootstrapCallerID, "image-settle-failure", 100, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := svc.Store().Reserve(ctx, store.ReserveRequest{
+		CallerID: key.CallerID, PluginKeyID: key.ID, IdempotencyKey: "image-settle-failure", Model: "image-model", RequestTokenEstimate: 1, AmountMicroUSD: money.MicroUSD(10),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const requestID = "image-settle-failure"
+	imageHoldsMu.Lock()
+	imageHolds[requestID] = imageHold{reservation: reservation, plan: service.ReservePlan{
+		Model: "image-model", ImageCount: 1,
+		Price: money.PricePerMTok{BillingMode: money.BillingPerImage, PerImage: -1},
+	}}
+	imageHoldsMu.Unlock()
+	t.Cleanup(func() {
+		imageHoldsMu.Lock()
+		delete(imageHolds, requestID)
+		imageHoldsMu.Unlock()
+	})
+	raw, err := json.Marshal(pluginapi.RequestCompletion{RequestID: requestID, Outcome: pluginapi.RequestCompletionSucceeded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := completeInterceptedRequest(raw); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Store().GetPluginKey(ctx, key.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HeldAmountMicroUSD != 0 {
+		t.Fatalf("settle failure leaked image hold = %d", got.HeldAmountMicroUSD)
+	}
+	final, err := svc.Store().GetReservation(ctx, reservation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Status != store.ReservationReleased {
+		t.Fatalf("reservation status = %s, want released", final.Status)
+	}
+}
+
 func TestAfterAuthCarriesAndExecutorStripsLifecycleHeader(t *testing.T) {
 	ctx := context.Background()
 	svc := newLifecycleTestService(t)

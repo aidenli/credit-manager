@@ -29,7 +29,7 @@ type Service struct {
 	cfg                config.Config
 	peppers            config.PepperSet
 	store              *store.Store
-	authMu             sync.Mutex
+	authMu             authMutex
 	authCond           *sync.Cond
 	authPending        map[string]*pendingAuthCapture
 	cleanupMu          sync.Mutex
@@ -41,6 +41,29 @@ type Service struct {
 	directorySyncer    ModelDirectorySyncer
 	directoryIDsMu     sync.Mutex
 	lastDirectoryIDs   []string
+}
+
+// authMutex is copy-safe because it shares its underlying lock. A same-store
+// reconfigure publishes a new Service while in-flight requests still use the
+// old one, so both instances must serialize access to the same auth map.
+type authMutex struct {
+	shared *sync.Mutex
+}
+
+func (m *authMutex) init() {
+	if m.shared == nil {
+		m.shared = &sync.Mutex{}
+	}
+}
+
+func (m *authMutex) Lock() {
+	m.init()
+	m.shared.Lock()
+}
+
+func (m *authMutex) Unlock() {
+	m.init()
+	m.shared.Unlock()
 }
 
 var current atomic.Pointer[Service]
@@ -70,12 +93,16 @@ func Open(ctx context.Context, cfg config.Config) (*Service, error) {
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
-	dbPath := cfg.DatabasePath()
+	dbPath, err := store.CanonicalDatabasePath(cfg.DatabasePath())
+	if err != nil {
+		return nil, err
+	}
 	st, err := store.OpenLocked(ctx, dbPath, store.OpenOptions{BusyTimeout: cfg.BusyTimeout}, lockfile.New())
 	if err != nil {
 		return nil, err
 	}
-	svc := &Service{cfg: cfg, peppers: peppers, store: st}
+	svc := &Service{cfg: cfg, peppers: peppers, store: st, authPending: make(map[string]*pendingAuthCapture)}
+	svc.authMu.init()
 	svc.authCond = sync.NewCond(&svc.authMu)
 	if err := svc.ensureBootstrap(ctx); err != nil {
 		_ = svc.Close()
@@ -123,7 +150,8 @@ var reconfigureMu sync.Mutex
 
 // Configure applies host register/reconfigure YAML.
 // Same database path reuses the open store (no second exclusive lock).
-// Path changes close the old instance first, then open the new one.
+// Changing the database path requires a CPA restart so in-flight requests never
+// retain a pointer to a store that has been closed underneath them.
 func Configure(ctx context.Context, rawYAML []byte) error {
 	reconfigureMu.Lock()
 	defer reconfigureMu.Unlock()
@@ -141,11 +169,21 @@ func Configure(ctx context.Context, rawYAML []byte) error {
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
 	}
-	dbPath := filepath.Clean(cfg.DatabasePath())
+	dbPath, err := store.CanonicalDatabasePath(cfg.DatabasePath())
+	if err != nil {
+		return err
+	}
 
-	if old := current.Load(); old != nil && filepath.Clean(old.cfg.DatabasePath()) == dbPath {
+	if old := current.Load(); old != nil {
+		oldDBPath, err := store.CanonicalDatabasePath(old.cfg.DatabasePath())
+		if err != nil {
+			return err
+		}
+		if oldDBPath != dbPath {
+			return fmt.Errorf("changing database path while CPA is running is not supported; restart CPA first")
+		}
 		// Keep the locked SQLite writer. Opening a second handle deadlocks on *.db.lock.
-		next := &Service{cfg: cfg, peppers: peppers, store: old.store}
+		next := &Service{cfg: cfg, peppers: peppers, store: old.store, authMu: old.authMu, authCond: old.authCond, authPending: old.authPending}
 		next.SetAuthQuotaSource(old.authQuotaSourceValue())
 		next.SetModelDirectorySyncer(old.directorySyncer)
 		old.directoryIDsMu.Lock()
@@ -166,15 +204,13 @@ func Configure(ctx context.Context, rawYAML []byte) error {
 		return nil
 	}
 
-	// Different data path (or first start): release the previous exclusive lock first.
-	if old := current.Swap(nil); old != nil {
-		_ = old.Close()
-	}
+	// First start: acquire the exclusive writer lock for the canonical path.
 	st, err := store.OpenLocked(ctx, dbPath, store.OpenOptions{BusyTimeout: cfg.BusyTimeout}, lockfile.New())
 	if err != nil {
 		return err
 	}
-	svc := &Service{cfg: cfg, peppers: peppers, store: st}
+	svc := &Service{cfg: cfg, peppers: peppers, store: st, authPending: make(map[string]*pendingAuthCapture)}
+	svc.authMu.init()
 	svc.authCond = sync.NewCond(&svc.authMu)
 	if err := svc.ensureBootstrap(ctx); err != nil {
 		_ = svc.Close()

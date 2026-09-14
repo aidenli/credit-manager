@@ -148,7 +148,12 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 		return err
 	}
 	if bindStreamLifecycle(lifecycleID, reservation.ID) {
-		_ = svc.Release(ctx, reservation.ID, "client_disconnected_before_upstream")
+		if releaseErr := svc.Release(ctx, reservation.ID, "client_disconnected_before_upstream"); releaseErr != nil {
+			// Do not strand the Key slot if SQLite's final release briefly fails.
+			// The financial hold remains recoverable through the normal stale path.
+			_ = svc.FinishClientExecution(ctx, reservation.ID)
+			return fmt.Errorf("release pre-upstream cancellation: %w", releaseErr)
+		}
 		return errClientDisconnectedBeforeUpstream
 	}
 	svc.TrackAuthCapture(reservation.ID, plan.Model, req.Model)
@@ -156,6 +161,13 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 	if err := admitExecutorAuth(ctx, svc, reservation.ID, req.ExecutorRequest); err != nil {
 		_ = svc.Release(ctx, reservation.ID, "auth_concurrency:"+err.Error())
 		return err
+	}
+	if !beginStreamUpstream(lifecycleID) {
+		if releaseErr := svc.Release(ctx, reservation.ID, "client_disconnected_before_upstream"); releaseErr != nil {
+			_ = svc.FinishClientExecution(ctx, reservation.ID)
+			return fmt.Errorf("release pre-upstream cancellation: %w", releaseErr)
+		}
+		return errClientDisconnectedBeforeUpstream
 	}
 	stopHeartbeat := startReservationHeartbeat(svc, reservation.ID)
 	defer stopHeartbeat()
@@ -317,8 +329,20 @@ func isAuthConcurrencyError(err error) bool {
 
 func startReservationHeartbeat(svc *service.Service, reservationID string) func() {
 	done := make(chan struct{})
+	var stopOnce sync.Once
+	if svc == nil || strings.TrimSpace(reservationID) == "" {
+		return func() { stopOnce.Do(func() { close(done) }) }
+	}
+	_ = svc.TouchReservation(context.Background(), reservationID)
+	interval := time.Minute
+	if timeout := svc.Config().Stream.StaleReservationTimeout; timeout > 0 && timeout/3 < interval {
+		interval = timeout / 3
+	}
+	if interval < time.Second {
+		interval = time.Second
+	}
 	go func() {
-		ticker := time.NewTicker(time.Minute)
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -329,7 +353,7 @@ func startReservationHeartbeat(svc *service.Service, reservationID string) func(
 			}
 		}
 	}()
-	return func() { close(done) }
+	return func() { stopOnce.Do(func() { close(done) }) }
 }
 
 func hostModelExecute(hostCallbackID string, req pluginapi.ExecutorRequest, body []byte, stream bool) ([]byte, http.Header, int, error) {

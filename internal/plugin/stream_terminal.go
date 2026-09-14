@@ -15,6 +15,9 @@ type streamTerminalDetector struct {
 	finished        bool
 	expectedChoices int
 	finishedChoices map[int]bool
+	jsonDepth       int
+	jsonInString    bool
+	jsonEscape      bool
 }
 
 func newStreamTerminalDetector(request []byte) streamTerminalDetector {
@@ -33,9 +36,9 @@ func (d *streamTerminalDetector) Feed(payload []byte) bool {
 		return false
 	}
 	// Some host chunks concatenate complete SSE fields after stripping the blank
-	// delimiter. Insert the same recoverable boundaries used by usage parsing.
-	payload = bytes.ReplaceAll(payload, []byte("event:"), []byte("\nevent:"))
-	payload = bytes.ReplaceAll(payload, []byte("data:"), []byte("\ndata:"))
+	// delimiter. Recover only markers outside JSON so model content containing
+	// literal "event:" or "data:" does not corrupt a terminal frame.
+	payload = d.normalizeSSEBoundaries(payload)
 	for len(payload) > 0 {
 		i := bytes.IndexByte(payload, '\n')
 		part := payload
@@ -56,8 +59,9 @@ func (d *streamTerminalDetector) Feed(payload []byte) bool {
 		line := bytes.TrimSpace(d.line)
 		// JSON data can be split at any byte boundary. Only a complete field may
 		// update choice state; [DONE] is the lone safe no-delimiter shortcut.
-		exactDone := bytes.Equal(line, []byte("data: [DONE]"))
-		if !d.skipLine && (completeField || exactDone) && d.terminalSSELine(line) {
+		exactDone := bytes.Equal(line, []byte("data: [DONE]")) || bytes.Equal(line, []byte("[DONE]"))
+		completeRawJSON := !bytes.HasPrefix(line, []byte("data:")) && json.Valid(line)
+		if !d.skipLine && (completeField || exactDone || completeRawJSON) && d.terminalSSELine(line) {
 			d.finished = true
 			d.line = nil
 			return true
@@ -72,14 +76,78 @@ func (d *streamTerminalDetector) Feed(payload []byte) bool {
 	return false
 }
 
+func (d *streamTerminalDetector) normalizeSSEBoundaries(payload []byte) []byte {
+	if len(payload) == 0 {
+		return payload
+	}
+	out := make([]byte, 0, len(payload)+16)
+	for i := 0; i < len(payload); {
+		if !d.jsonInString && d.jsonDepth == 0 && (bytes.HasPrefix(payload[i:], []byte("event:")) || bytes.HasPrefix(payload[i:], []byte("data:"))) {
+			if (i > 0 && payload[i-1] != '\n') || (i == 0 && len(d.line) > 0) {
+				out = append(out, '\n')
+				d.resetJSONState()
+			}
+			markerLen := len("event:")
+			if bytes.HasPrefix(payload[i:], []byte("data:")) {
+				markerLen = len("data:")
+			}
+			out = append(out, payload[i:i+markerLen]...)
+			i += markerLen
+			continue
+		}
+		b := payload[i]
+		out = append(out, b)
+		d.consumeJSONByte(b)
+		i++
+	}
+	return out
+}
+
+func (d *streamTerminalDetector) consumeJSONByte(b byte) {
+	if b == '\n' || b == '\r' {
+		d.resetJSONState()
+		return
+	}
+	if d.jsonInString {
+		if d.jsonEscape {
+			d.jsonEscape = false
+			return
+		}
+		if b == '\\' {
+			d.jsonEscape = true
+			return
+		}
+		if b == '"' {
+			d.jsonInString = false
+		}
+		return
+	}
+	switch b {
+	case '"':
+		d.jsonInString = true
+	case '{', '[':
+		d.jsonDepth++
+	case '}', ']':
+		if d.jsonDepth > 0 {
+			d.jsonDepth--
+		}
+	}
+}
+
+func (d *streamTerminalDetector) resetJSONState() {
+	d.jsonDepth = 0
+	d.jsonInString = false
+	d.jsonEscape = false
+}
+
 func (d *streamTerminalDetector) terminalSSELine(line []byte) bool {
 	if bytes.HasPrefix(line, []byte("event:")) {
 		return terminalEvent(string(bytes.TrimSpace(line[6:])))
 	}
-	if !bytes.HasPrefix(line, []byte("data:")) {
-		return false
+	data := line
+	if bytes.HasPrefix(line, []byte("data:")) {
+		data = bytes.TrimSpace(line[5:])
 	}
-	data := bytes.TrimSpace(line[5:])
 	if bytes.Equal(data, []byte("[DONE]")) {
 		return true
 	}

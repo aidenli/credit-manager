@@ -57,6 +57,30 @@ func TestReleaseStoppedRefusesWriterThroughSymlink(t *testing.T) {
 	}
 }
 
+func TestReleaseStoppedRefusesOpenLockedWriterThroughAlias(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "credit-manager.db")
+	seed, err := store.Open(ctx, databasePath, store.OpenOptions{BusyTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "credit-manager-alias.db")
+	if err := os.Symlink(databasePath, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	running, err := store.OpenLocked(ctx, alias, store.OpenOptions{BusyTimeout: time.Second}, lockfile.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer running.Close()
+	if _, err := releaseStopped(alias); err == nil {
+		t.Fatal("recovery should refuse the canonical lock held by CPA through an alias")
+	}
+}
+
 func TestReleaseStoppedReleasesAllHeldReservations(t *testing.T) {
 	ctx := context.Background()
 	databasePath := filepath.Join(t.TempDir(), "credit-manager.db")

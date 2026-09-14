@@ -85,6 +85,38 @@ func TestTerminalEventReleasesSlotBeforeForwarding(t *testing.T) {
 	}
 }
 
+func TestReservationHeartbeatTouchesImmediately(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.Stream.StaleReservationTimeout = time.Minute
+	svc, err := service.Open(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	key, _, err := svc.MintKey(ctx, service.BootstrapCallerID, "heartbeat", 100, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := svc.Store().Reserve(ctx, store.ReserveRequest{
+		CallerID: key.CallerID, PluginKeyID: key.ID, IdempotencyKey: "heartbeat", Model: "model", RequestTokenEstimate: 1, AmountMicroUSD: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	stop := startReservationHeartbeat(svc, reservation.ID)
+	defer stop()
+	got, err := svc.Store().GetReservation(ctx, reservation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.UpdatedAt.After(reservation.UpdatedAt) {
+		t.Fatalf("heartbeat did not touch immediately: before=%s after=%s", reservation.UpdatedAt, got.UpdatedAt)
+	}
+}
+
 func TestStreamTerminalDetector(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -144,5 +176,32 @@ func TestStreamTerminalDetectorWaitsForCompleteDataField(t *testing.T) {
 	}
 	if !detector.Feed([]byte("data: {\"choices\":[{\"index\":1,\"finish_reason\":\"stop\"}]}\n\n")) {
 		t.Fatal("all complete choices should release concurrency")
+	}
+}
+
+func TestStreamTerminalDetectorPreservesSSEMarkersInsideJSONStrings(t *testing.T) {
+	cases := []string{
+		`data: {"type":"response.completed","response":{"output_text":"literal data: and event: text"}}` + "\n\n",
+		`data: {"choices":[{"index":0,"delta":{"content":"event: data:"},"finish_reason":"stop"}]}` + "\n\n",
+	}
+	for _, payload := range cases {
+		detector := newStreamTerminalDetector(nil)
+		if !detector.Feed([]byte(payload)) {
+			t.Fatalf("terminal marker inside JSON text broke detection for %q", payload)
+		}
+	}
+}
+
+func TestStreamTerminalDetectorRecognizesRawHostJSONChunks(t *testing.T) {
+	cases := []string{
+		`{"type":"response.completed"}`,
+		`{"choices":[{"index":0,"finish_reason":"stop"}]}`,
+		`[DONE]`,
+	}
+	for _, payload := range cases {
+		detector := newStreamTerminalDetector(nil)
+		if !detector.Feed([]byte(payload)) {
+			t.Fatalf("raw host payload did not release concurrency: %q", payload)
+		}
 	}
 }

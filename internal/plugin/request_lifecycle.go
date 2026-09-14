@@ -18,10 +18,11 @@ const lifecycleRequestHeader = "X-Credit-Manager-Request-Token"
 var errClientDisconnectedBeforeUpstream = errors.New("client disconnected before upstream execution started")
 
 type streamLifecycle struct {
-	svc           *service.Service
-	createdAt     time.Time
-	reservationID string
-	canceled      bool
+	svc            *service.Service
+	createdAt      time.Time
+	reservationID  string
+	canceled       bool
+	clientFinished bool
 }
 
 var (
@@ -45,8 +46,8 @@ func trackStreamLifecycle(requestID string, svc *service.Service) {
 }
 
 // bindStreamLifecycle associates the executor's reservation after it is made.
-// A cancellation that arrived before the executor started returns true, so the
-// reservation can be released without ever starting the nested host call.
+// The caller must still pass beginStreamUpstream immediately before the nested
+// host callback; cancellation may arrive while auth selection is in progress.
 func bindStreamLifecycle(requestID, reservationID string) bool {
 	requestID = strings.TrimSpace(requestID)
 	reservationID = strings.TrimSpace(reservationID)
@@ -64,7 +65,28 @@ func bindStreamLifecycle(requestID, reservationID string) bool {
 		return true
 	}
 	state.reservationID = reservationID
-	return false
+	return state.canceled
+}
+
+// beginStreamUpstream is the final launch gate before host.model.execute_stream.
+// It atomically distinguishes cancellation that arrived before upstream launch
+// from cancellation after launch, where only the downstream Key slot is safe to
+// release.
+func beginStreamUpstream(requestID string) bool {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return true
+	}
+	streamLifecyclesMu.Lock()
+	defer streamLifecyclesMu.Unlock()
+	state := streamLifecycles[requestID]
+	if state == nil {
+		return true
+	}
+	if state.canceled {
+		return false
+	}
+	return true
 }
 
 func clearStreamLifecycle(requestID string) {
@@ -96,11 +118,12 @@ func completeStreamLifecycle(req pluginapi.RequestCompletion) {
 	state.canceled = true
 	reservationID := state.reservationID
 	svc := state.svc
-	if reservationID != "" {
-		delete(streamLifecycles, requestID)
+	finishClient := reservationID != "" && !state.clientFinished
+	if finishClient {
+		state.clientFinished = true
 	}
 	streamLifecyclesMu.Unlock()
-	if reservationID != "" && svc != nil {
+	if finishClient && svc != nil {
 		// Preserve auth/upstream and financial accounting. CPA has only told us
 		// the client is gone; it has not yet canceled the nested model stream.
 		_ = svc.FinishClientExecution(context.Background(), reservationID)

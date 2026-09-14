@@ -140,7 +140,9 @@ func completeInterceptedRequest(raw []byte) ([]byte, error) {
 		return okEnvelope(map[string]any{})
 	}
 	metrics := usageMetricsFromRequest(nil, req.StartedAt, req.CompletedAt, resultFromStatus(req.StatusCode))
-	_ = svc.SettleFromUsage(ctx, hold.reservation, hold.plan, usageparse.Result{}, firstNonEmpty(req.SourceFormat, "openai-image"), metrics)
+	if settleErr := svc.SettleFromUsage(ctx, hold.reservation, hold.plan, usageparse.Result{}, firstNonEmpty(req.SourceFormat, "openai-image"), metrics); settleErr != nil {
+		_ = svc.Release(ctx, hold.reservation.ID, "settle_failed")
+	}
 	return okEnvelope(map[string]any{})
 }
 
