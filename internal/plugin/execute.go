@@ -114,13 +114,14 @@ func executeStream(raw []byte) ([]byte, error) {
 	if streamID == "" {
 		return errorEnvelope("executor_error", "stream_id is required"), nil
 	}
+	lifecycleID := lifecycleIDFromHeaders(req.Headers)
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				closePluginStream(streamID, fmt.Sprintf("panic: %v", recovered))
 			}
 		}()
-		if err := runStream(context.Background(), svc, req, streamID); err != nil {
+		if err := runStream(context.Background(), svc, req, streamID, lifecycleID); err != nil {
 			closePluginStream(streamID, err.Error())
 			return
 		}
@@ -131,7 +132,8 @@ func executeStream(raw []byte) ([]byte, error) {
 	})
 }
 
-func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest, pluginStreamID string) error {
+func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest, pluginStreamID, lifecycleID string) error {
+	defer clearStreamLifecycle(lifecycleID)
 	key, _, err := svc.ResolveIdentity(ctx, req.Headers, req.Metadata)
 	if err != nil {
 		return err
@@ -144,6 +146,10 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 	reservation, err := svc.Reserve(ctx, key, plan, "")
 	if err != nil {
 		return err
+	}
+	if bindStreamLifecycle(lifecycleID, reservation.ID) {
+		_ = svc.Release(ctx, reservation.ID, "client_disconnected_before_upstream")
+		return errClientDisconnectedBeforeUpstream
 	}
 	svc.TrackAuthCapture(reservation.ID, plan.Model, req.Model)
 	defer func() { _ = svc.FinishExecution(ctx, reservation.ID) }()

@@ -80,7 +80,7 @@ func TestTerminalEventReleasesSlotBeforeForwarding(t *testing.T) {
 	if err := runStream(ctx, svc, rpcExecutorRequest{ExecutorRequest: pluginapi.ExecutorRequest{
 		Model: "test-model", SourceFormat: "openai-response", Format: "openai-response", Stream: true,
 		Headers: http.Header{"Authorization": []string{"Bearer " + material.Plaintext}}, Payload: body,
-	}}, "downstream"); err != nil {
+	}}, "downstream", ""); err != nil {
 		t.Fatal(err)
 	}
 }

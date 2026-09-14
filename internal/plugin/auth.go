@@ -66,15 +66,23 @@ func interceptRequestAfterAuth(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, err
 	}
-	if !isNativeImageProtocol(req.SourceFormat) && !isImageOnlyModel(firstNonEmpty(req.RequestedModel, req.Model)) {
-		return okEnvelope(pluginapi.RequestInterceptResponse{})
-	}
 	requestID := strings.TrimSpace(req.RequestID)
 	if requestID == "" {
 		return okEnvelope(pluginapi.RequestInterceptResponse{})
 	}
 	ctx := context.Background()
 	key, _, err := svc.ResolveIdentity(ctx, req.Headers, req.Metadata)
+	if !isNativeImageProtocol(req.SourceFormat) && !isImageOnlyModel(firstNonEmpty(req.RequestedModel, req.Model)) {
+		// CPA invokes this hook before its executor. Carry the lifecycle request ID
+		// into our executor, then remove it before the nested host model call.
+		if err == nil && req.Stream {
+			trackStreamLifecycle(requestID, svc)
+			return okEnvelope(pluginapi.RequestInterceptResponse{Headers: http.Header{
+				lifecycleRequestHeader: []string{requestID},
+			}})
+		}
+		return okEnvelope(pluginapi.RequestInterceptResponse{})
+	}
 	if err != nil {
 		return okEnvelope(quotaRejectResponse(http.StatusUnauthorized, err.Error()))
 	}
@@ -112,6 +120,7 @@ func completeInterceptedRequest(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, err
 	}
+	completeStreamLifecycle(req)
 	requestID := strings.TrimSpace(req.RequestID)
 	imageHoldsMu.Lock()
 	hold, ok := imageHolds[requestID]
