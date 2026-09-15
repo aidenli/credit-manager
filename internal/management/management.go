@@ -40,6 +40,9 @@ func Routes() []pluginapi.ManagementRoute {
 		{http.MethodGet, "credit-manager/balance"},
 		{http.MethodGet, "credit-manager/auth-quotas"},
 		{http.MethodPost, "credit-manager/auth-quotas/refresh"},
+		{http.MethodPost, "credit-manager/auth-quotas/warmup"},
+		{http.MethodGet, "credit-manager/auth-quotas/warmup/settings"},
+		{http.MethodPost, "credit-manager/auth-quotas/warmup/settings"},
 		{http.MethodPost, "credit-manager/auth-quotas/concurrency"},
 		{http.MethodPost, "credit-manager/auth-quotas/concurrency/batch"},
 	}
@@ -158,6 +161,12 @@ func Handle(ctx context.Context, req pluginapi.ManagementRequest) (pluginapi.Man
 		return getAuthQuotas(ctx, svc, req.Query)
 	case req.Method == http.MethodPost && path == "credit-manager/auth-quotas/refresh":
 		return refreshAuthQuota(ctx, svc, req.Body)
+	case req.Method == http.MethodPost && path == "credit-manager/auth-quotas/warmup":
+		return warmupAuthQuota(ctx, svc, req.Body)
+	case req.Method == http.MethodGet && path == "credit-manager/auth-quotas/warmup/settings":
+		return getAuthWarmupSettings(ctx, svc)
+	case req.Method == http.MethodPost && path == "credit-manager/auth-quotas/warmup/settings":
+		return updateAuthWarmupSettings(ctx, svc, req.Body)
 	case req.Method == http.MethodPost && path == "credit-manager/auth-quotas/concurrency/batch":
 		return updateAuthQuotaConcurrencyBatch(ctx, svc, req.Body)
 	case req.Method == http.MethodPost && path == "credit-manager/auth-quotas/concurrency":

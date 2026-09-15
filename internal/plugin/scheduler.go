@@ -26,6 +26,12 @@ func pickAuth(raw []byte) ([]byte, error) {
 		}
 		candidates = append(candidates, service.AuthPickCandidate{ID: id, Provider: candidate.Provider})
 	}
+	if authID, handled, err := warmupTarget(req.Options.Headers, candidates); handled {
+		if err != nil {
+			return errorEnvelope("warmup_rejected", err.Error()), nil
+		}
+		return okEnvelope(pluginapi.SchedulerPickResponse{AuthID: authID, Handled: true})
+	}
 	authID, handled, err := svc.PickAuth(context.Background(), candidates)
 	if err != nil {
 		return errorEnvelope("limit_rejected", err.Error()), nil

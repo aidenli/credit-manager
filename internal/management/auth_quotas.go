@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/yuluo688/credit-manager/internal/service"
+	"github.com/yuluo688/credit-manager/internal/store"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
@@ -57,6 +58,58 @@ func refreshAuthQuota(ctx context.Context, svc *service.Service, body []byte) (p
 		return jsonErrNoStore(http.StatusInternalServerError, "auth quota refresh failed"), nil
 	}
 	return jsonOKNoStore(map[string]any{"item": item}), nil
+}
+
+func warmupAuthQuota(ctx context.Context, svc *service.Service, body []byte) (pluginapi.ManagementResponse, error) {
+	var req struct {
+		Provider  string   `json:"provider"`
+		AuthID    string   `json:"auth_id"`
+		AuthIndex string   `json:"auth_index"`
+		Models    []string `json:"models"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return jsonErrNoStore(http.StatusBadRequest, "invalid json"), nil
+	}
+	if strings.TrimSpace(req.AuthID) == "" && strings.TrimSpace(req.AuthIndex) == "" {
+		return jsonErrNoStore(http.StatusBadRequest, "auth_id or auth_index is required"), nil
+	}
+	item, err := svc.WarmupAuthQuota(ctx, req.Provider, req.AuthID, req.AuthIndex, req.Models)
+	if err != nil {
+		message := strings.ToLower(err.Error())
+		switch {
+		case strings.Contains(message, "not found"):
+			return jsonErrNoStore(http.StatusNotFound, "auth quota not found"), nil
+		case strings.Contains(message, "disabled"), strings.Contains(message, "not configured"), strings.Contains(message, "unavailable"):
+			return jsonErrNoStore(http.StatusServiceUnavailable, "auth quota warmup unavailable"), nil
+		case strings.Contains(message, "requires a fresh"):
+			return jsonErrNoStore(http.StatusConflict, "refresh auth quota before warming up"), nil
+		case strings.Contains(message, "requires at least one model"), strings.Contains(message, "no selected model"):
+			return jsonErrNoStore(http.StatusConflict, err.Error()), nil
+		default:
+			return jsonErrNoStore(http.StatusInternalServerError, "auth quota warmup failed"), nil
+		}
+	}
+	return jsonOKNoStore(map[string]any{"item": item}), nil
+}
+
+func getAuthWarmupSettings(ctx context.Context, svc *service.Service) (pluginapi.ManagementResponse, error) {
+	settings, err := svc.AuthWarmupSettings(ctx)
+	if err != nil {
+		return jsonErrNoStore(http.StatusServiceUnavailable, "auth quota warmup unavailable"), nil
+	}
+	return jsonOKNoStore(settings), nil
+}
+
+func updateAuthWarmupSettings(ctx context.Context, svc *service.Service, body []byte) (pluginapi.ManagementResponse, error) {
+	var settings store.AuthWarmupSettings
+	if err := json.Unmarshal(body, &settings); err != nil {
+		return jsonErrNoStore(http.StatusBadRequest, "invalid json"), nil
+	}
+	updated, err := svc.UpdateAuthWarmupSettings(ctx, settings)
+	if err != nil {
+		return jsonErrNoStore(http.StatusBadRequest, err.Error()), nil
+	}
+	return jsonOKNoStore(updated), nil
 }
 
 func updateAuthQuotaConcurrency(ctx context.Context, svc *service.Service, body []byte) (pluginapi.ManagementResponse, error) {

@@ -428,7 +428,7 @@ func TestConsoleImagePricingUsesPerImageBilling(t *testing.T) {
 func TestConsoleAuthQuotaViewIsManagementOnly(t *testing.T) {
 	page := string(consolePage().Body)
 	for _, text := range []string{
-		"data-tab=\"auth-quotas\"", "credit-manager/auth-quotas", "credit-manager/auth-quotas/refresh", "短周期同样显示", "auth-quota-window-card", "auth-quota-bar", "function authQuotaPeriodBadge", "auth-quota-reload",
+		"data-tab=\"auth-quotas\"", "credit-manager/auth-quotas", "credit-manager/auth-quotas/refresh", "credit-manager/auth-quotas/warmup", "credit-manager/auth-quotas/warmup/settings", "auth-quota-warmup", "authQuotaWarmupStatus", "btnAuthWarmupSettings", "authWarmupSettingsModal", "btnAddAuthWarmupSchedule", "authWarmupScheduleList", "auth-warmup-task", "renderAuthWarmupSchedules", "openAuthWarmupSettings", "saveAuthWarmupSettings", "短周期同样显示", "auth-quota-window-card", "auth-quota-bar", "function authQuotaPeriodBadge", "auth-quota-reload",
 		"auth-quota-period-picker", "auth-quota-period-trigger", "auth-quota-period-menu", "auth-quota-period-option", "closeAuthQuotaPeriodMenus", "配额窗口", "authQuotaIsWeekly", "authQuotaIsCycleWindow", "function authQuotaPrimaryCycleWindows", "latestByBaseline", "authQuotaIsFiveHour", "authQuotaDisplayWindows", "const companions", "displayedCycles", "selectedPrimaryCycles", "authQuotaIsPartial(window)", "function authQuotaIsPartial", "return '不完整'", "authQuotaIsWeekly(window) || /quota|window/i.test(text)", "timeless", "function authQuotaWindowStartMs", "reset - duration * 1000", "authQuotaWindowCurrent", "6 * 60 * 60 * 1000", "includes('secondary')", "authQuotaCostForecast", "当前费用", "预估剩余", "预计可用", "authQuotaProviderFilter", "authQuotaNameFilter", "overflow-x:auto", "state.currentTab === 'auth-quotas'", "认证额度已从缓存刷新",
 		"btnRefreshAuthQuotaPage", "刷新本页", "authQuotaPagination", "authQuotaPageSize", "credit-manager/auth-quotas?", "page_size",
 		"authQuotaPlanName", "auth-quota-plan", "订阅类型",
@@ -517,6 +517,41 @@ func TestAuthQuotaRefreshRoute(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("auth quota refresh route is not registered")
+	}
+}
+
+func TestAuthQuotaWarmupRoute(t *testing.T) {
+	var warmup, getSettings, saveSettings bool
+	for _, route := range Routes() {
+		switch {
+		case route.Method == "POST" && route.Path == "credit-manager/auth-quotas/warmup":
+			warmup = true
+		case route.Method == "GET" && route.Path == "credit-manager/auth-quotas/warmup/settings":
+			getSettings = true
+		case route.Method == "POST" && route.Path == "credit-manager/auth-quotas/warmup/settings":
+			saveSettings = true
+		}
+	}
+	if !warmup || !getSettings || !saveSettings {
+		t.Fatalf("warmup routes = warmup:%t get:%t save:%t", warmup, getSettings, saveSettings)
+	}
+}
+
+func TestConsoleAuthQuotaWarmupClearsBusyStateBeforeReload(t *testing.T) {
+	page := string(consolePage().Body)
+	start := strings.Index(page, "async function warmupAuthQuota")
+	if start < 0 {
+		t.Fatal("warmup lifecycle function is missing")
+	}
+	end := strings.Index(page[start:], "async function fetchAuthWarmupModels")
+	if end < 0 {
+		t.Fatal("warmup lifecycle boundary is missing")
+	}
+	warmup := page[start : start+end]
+	clearAt := strings.Index(warmup, "delete state.authQuotaWarming[itemKey];")
+	reloadAt := strings.Index(warmup, "await loadAuthQuotas();")
+	if clearAt < 0 || reloadAt < 0 || clearAt > reloadAt {
+		t.Fatalf("warmup busy state is not cleared before reload: clear=%d reload=%d", clearAt, reloadAt)
 	}
 }
 

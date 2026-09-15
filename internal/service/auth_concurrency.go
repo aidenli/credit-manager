@@ -151,20 +151,25 @@ func (s *Service) PickAuth(ctx context.Context, candidates []AuthPickCandidate) 
 			break
 		}
 	}
-	if !anyLimit {
-		return "", false, nil
-	}
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
 	s.ensureAuthPendingLocked()
 	available := make([]AuthPickCandidate, 0, len(candidates))
+	hasWarmupHold := false
 	for _, candidate := range candidates {
 		limit := authConcurrencyLimitOf(limits, candidate)
 		provider, id := authLimitProvider(candidate.Provider), strings.TrimSpace(candidate.ID)
+		if s.authWarmupBusyLocked(provider, id) {
+			hasWarmupHold = true
+			continue
+		}
 		if limit > 0 && provider != "" && id != "" && s.activeAuthRequestsLocked(provider, id, "") >= limit {
 			continue
 		}
 		available = append(available, candidate)
+	}
+	if !anyLimit && !hasWarmupHold {
+		return "", false, nil
 	}
 	if len(available) == 0 {
 		return "", true, store.ErrConcurrentLimit
@@ -272,7 +277,27 @@ func (s *Service) activeAuthRequestsLocked(provider, authID, exceptReservation s
 			n++
 		}
 	}
+	for _, auth := range s.warmupHolds {
+		holdProvider, holdID := authLimitIdentity(auth)
+		if holdID == authID && (provider == "" || holdProvider == provider) {
+			n++
+		}
+	}
 	return n
+}
+
+func (s *Service) authWarmupBusyLocked(provider, authID string) bool {
+	provider, authID = authLimitProvider(provider), strings.TrimSpace(authID)
+	if authID == "" {
+		return false
+	}
+	for _, auth := range s.warmupHolds {
+		holdProvider, holdID := authLimitIdentity(auth)
+		if holdID == authID && (provider == "" || holdProvider == provider) {
+			return true
+		}
+	}
+	return false
 }
 
 func authConcurrencyLimitOf(limits map[string]int64, candidate AuthPickCandidate) int64 {

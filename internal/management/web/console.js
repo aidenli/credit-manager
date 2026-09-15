@@ -233,6 +233,8 @@
     authQuotaWeeks: {},
     authQuotaCurrentWeeks: {},
     authQuotaRefreshing: {},
+    authQuotaWarming: {},
+    authWarmupSettingsSaving: false,
     authQuotaProvider: '',
     authQuotaName: '',
     authQuotaPage: 1,
@@ -1000,7 +1002,7 @@
   function customControlText(select) {
     if (select.multiple) {
       const chosen = [...select.options].filter(option => option.selected).map(option => option.textContent.trim());
-      return chosen.length ? chosen.join('、') : t('全部模型（默认）');
+      return chosen.length ? chosen.join('、') : (select.dataset.emptyText || t('全部模型（默认）'));
     }
     return select.selectedOptions[0] ? select.selectedOptions[0].textContent.trim() : t('请选择');
   }
@@ -1804,6 +1806,7 @@
     state.authQuotaWeeks = {};
     state.authQuotaCurrentWeeks = {};
     state.authQuotaRefreshing = {};
+    state.authQuotaWarming = {};
     state.authQuotaProvider = '';
     state.authQuotaName = '';
     state.authQuotaPage = 1;
@@ -4269,10 +4272,12 @@
     const remaining = Number(authQuotaValue(window, 'remaining_ratio'));
     const known = Number.isFinite(used) || Number.isFinite(remaining);
     const remainingRatio = Number.isFinite(remaining) ? remaining : (Number.isFinite(used) ? 1 - used : 0);
-    const remainingPercent = Math.round(Math.max(0, Math.min(100, remainingRatio * 100)));
-    const usedPercent = Math.round(Math.max(0, Math.min(100, (1 - remainingRatio) * 100)));
+    const remainingExactPercent = Math.max(0, Math.min(100, remainingRatio * 100));
+    const usedExactPercent = Math.max(0, Math.min(100, (1 - remainingRatio) * 100));
+    const remainingPercent = Math.round(remainingExactPercent);
+    const usedPercent = Math.round(usedExactPercent);
     const tone = remainingPercent >= 70 ? '' : (remainingPercent >= 30 ? 'warn' : 'danger');
-    return { known, percent: usedPercent, remainingPercent, tone };
+    return { known, percent: usedPercent, remainingPercent, remainingExactPercent, usedExactPercent, tone };
   }
 
   function authQuotaTimeMs(value) {
@@ -4580,6 +4585,10 @@
     }
     if (!ratio.known) return '—';
     if (kind === 'antigravity') {
+      if (ratio.usedExactPercent > 0 && ratio.usedExactPercent < 0.5) {
+        const digits = ratio.usedExactPercent < 0.01 ? 4 : 2;
+        return t('已用') + ' ' + ratio.usedExactPercent.toFixed(digits).replace(/\.?0+$/, '') + '%';
+      }
       if (ratio.remainingPercent >= 100) return t('额度可用');
       return t('剩余') + ' ' + ratio.remainingPercent + '%';
     }
@@ -4854,16 +4863,39 @@
         ? '<div class="auth-quota-period-picker"><button type="button" class="auth-quota-period-trigger" data-auth-id="'+esc(itemKey)+'" aria-haspopup="listbox" aria-expanded="false" title="'+esc(t('配额窗口'))+'"><span class="auth-quota-period-value">'+esc(selectedWeek.label)+'</span><span class="auth-quota-period-chevron" aria-hidden="true"></span></button><div class="auth-quota-period-menu" role="listbox" aria-label="'+esc(t('配额窗口'))+'">'+weeks.map(week => '<button type="button" class="auth-quota-period-option'+(week.key === selected ? ' is-selected' : '')+(week.partial ? ' is-partial' : '')+'" data-auth-id="'+esc(itemKey)+'" data-auth-period="'+esc(week.key)+'" role="option" aria-selected="'+String(week.key === selected)+'"><span class="auth-quota-period-option-value">'+esc(week.label)+'</span><span class="auth-quota-period-option-mark" aria-hidden="true"></span></button>').join('')+'</div></div>'
         : '<div class="auth-quota-period-picker is-disabled"><button type="button" class="auth-quota-period-trigger" disabled title="'+esc(t('配额窗口'))+'"><span class="auth-quota-period-value">'+esc(t('暂无配额窗口'))+'</span><span class="auth-quota-period-chevron" aria-hidden="true"></span></button></div>';
       const refreshing = !!state.authQuotaRefreshing[itemKey];
+      const warming = !!state.authQuotaWarming[itemKey];
       const maxConcurrent = Math.max(0, Number(authQuotaValue(item, 'max_concurrent_requests') || 0) || 0);
       const activeRequests = Math.max(0, Number(authQuotaValue(item, 'active_requests') || 0) || 0);
       const concurrentValue = maxConcurrent > 0 ? String(maxConcurrent) : '';
       const concurrentInput = '<div class="auth-quota-cost auth-quota-concurrency"><span class="auth-quota-concurrency-label"><span class="auth-quota-concurrency-icon" aria-hidden="true">'+authQuotaIcon('bolt')+'</span>'+esc(t('并发')+' · '+t('在途'))+'<b class="auth-quota-active'+(activeRequests > 0 ? ' is-active' : '')+'" title="在途请求数">'+String(activeRequests)+'</b></span><input class="auth-quota-concurrency-input" type="number" min="0" step="1" inputmode="numeric" placeholder="不限制" value="'+esc(concurrentValue)+'" data-provider="'+esc(authQuotaValue(item, 'provider') || '')+'" data-auth-id="'+esc(authQuotaValue(item, 'auth_id') || '')+'" data-auth-index="'+esc(authQuotaValue(item, 'auth_index') || '')+'" data-item-key="'+esc(itemKey)+'" title="最大并发请求数，0 或不填为不限制"></div>';
-      const reloadBtn = '<button type="button" class="btn sm ghost auth-quota-reload" data-provider="'+esc(authQuotaValue(item, 'provider') || '')+'" data-auth-id="'+esc(authQuotaValue(item, 'auth_id') || '')+'" data-auth-index="'+esc(authQuotaValue(item, 'auth_index') || '')+'" data-item-key="'+esc(itemKey)+'"'+(refreshing ? ' disabled' : '')+' title="重新加载"><span class="auth-quota-reload-icon" aria-hidden="true">'+authQuotaIcon('refresh')+'</span><span>'+(refreshing ? '加载中' : '重新加载')+'</span></button>';
+      const warmup = authQuotaValue(item, 'warmup') || {};
+      const warmupStatus = authQuotaWarmupStatus(warmup);
+      const warmupBtn = '<button type="button" class="btn sm ghost auth-quota-warmup" data-provider="'+esc(authQuotaValue(item, 'provider') || '')+'" data-auth-id="'+esc(authQuotaValue(item, 'auth_id') || '')+'" data-auth-index="'+esc(authQuotaValue(item, 'auth_index') || '')+'" data-item-key="'+esc(itemKey)+'"'+(refreshing || warming ? ' disabled' : '')+' title="发送最小请求以提前启动额度窗口"><span>'+ (warming ? '预热中' : '预热') +'</span></button>';
+      const reloadBtn = '<button type="button" class="btn sm ghost auth-quota-reload" data-provider="'+esc(authQuotaValue(item, 'provider') || '')+'" data-auth-id="'+esc(authQuotaValue(item, 'auth_id') || '')+'" data-auth-index="'+esc(authQuotaValue(item, 'auth_index') || '')+'" data-item-key="'+esc(itemKey)+'"'+(refreshing || warming ? ' disabled' : '')+' title="重新加载"><span class="auth-quota-reload-icon" aria-hidden="true">'+authQuotaIcon('refresh')+'</span><span>'+(refreshing ? '加载中' : '重新加载')+'</span></button>';
       const plan = authQuotaPlanName(authQuotaValue(item, 'plan'));
       const planLabel = plan ? '<span class="auth-quota-plan" title="订阅类型">'+esc(plan)+'</span>' : '';
       const provider = String(authQuotaValue(item, 'provider') || '');
-      return '<article class="card auth-quota-card'+(refreshing ? ' is-refreshing' : '')+'" data-provider="'+esc(provider || 'unknown')+'"><header class="auth-quota-header"><div class="auth-quota-identity"><div class="auth-quota-identity-row"><div class="auth-quota-identity-main"><span class="auth-quota-provider-icon" aria-hidden="true">'+authQuotaProviderIcon(provider)+'</span><p class="auth-quota-provider'+(authQuotaProviderIsBrand(provider) ? '' : ' is-custom')+'" title="'+esc(provider || t('未知提供商'))+'">'+esc(authQuotaProviderName(provider))+'</p>'+planLabel+'</div><span class="badge '+badge.tone+'">'+esc(badge.text)+'</span></div><div class="auth-quota-account-row"><h2 class="auth-quota-title" title="'+esc(authQuotaValue(item, 'display_name') || t('未命名认证'))+'">'+esc(authQuotaValue(item, 'display_name') || t('未命名认证'))+'</h2><p class="auth-quota-sync" title="上次同步 '+esc(authQuotaTime(authQuotaValue(item, 'last_success_at')))+'"><span class="auth-quota-sync-icon" aria-hidden="true">'+authQuotaIcon('clock')+'</span><span>同步</span> '+esc(authQuotaShortTime(authQuotaValue(item, 'last_success_at')))+'</p></div></div><div class="auth-quota-cost-grid"><div class="auth-quota-cost"><span>'+authQuotaIcon('coin')+esc(t('当前费用'))+'</span><strong title="'+esc(costs.used)+'">'+esc(costs.used)+'</strong></div><div class="auth-quota-cost"><span>'+authQuotaIcon('wallet')+esc(t('预估剩余'))+'</span><strong title="'+esc(costs.remaining)+'">'+esc(costs.remaining)+'</strong></div><div class="auth-quota-cost"><span>'+authQuotaIcon('trend')+esc(t('预计可用'))+'</span><strong title="'+esc(costs.available)+'">'+esc(costs.available)+'</strong></div>'+concurrentInput+'</div><div class="auth-quota-header-tools">'+weekSelect+reloadBtn+'</div></header>'+(error ? '<div class="auth-quota-error">'+esc(error)+'</div>' : '')+'<div class="auth-quota-window-grid">'+cards+'</div></article>';
+      return '<article class="card auth-quota-card'+(refreshing ? ' is-refreshing' : '')+'" data-provider="'+esc(provider || 'unknown')+'"><header class="auth-quota-header"><div class="auth-quota-identity"><div class="auth-quota-identity-row"><div class="auth-quota-identity-main"><span class="auth-quota-provider-icon" aria-hidden="true">'+authQuotaProviderIcon(provider)+'</span><p class="auth-quota-provider'+(authQuotaProviderIsBrand(provider) ? '' : ' is-custom')+'" title="'+esc(provider || t('未知提供商'))+'">'+esc(authQuotaProviderName(provider))+'</p>'+planLabel+'</div><span class="badge '+badge.tone+'">'+esc(badge.text)+'</span></div><div class="auth-quota-account-row"><h2 class="auth-quota-title" title="'+esc(authQuotaValue(item, 'display_name') || t('未命名认证'))+'">'+esc(authQuotaValue(item, 'display_name') || t('未命名认证'))+'</h2><p class="auth-quota-sync" title="上次同步 '+esc(authQuotaTime(authQuotaValue(item, 'last_success_at')))+'"><span class="auth-quota-sync-icon" aria-hidden="true">'+authQuotaIcon('clock')+'</span><span>同步</span> '+esc(authQuotaShortTime(authQuotaValue(item, 'last_success_at')))+'</p></div>'+ (warmupStatus ? '<div class="auth-quota-warmup-row">'+warmupStatus+'</div>' : '') +'</div><div class="auth-quota-cost-grid"><div class="auth-quota-cost"><span>'+authQuotaIcon('coin')+esc(t('当前费用'))+'</span><strong title="'+esc(costs.used)+'">'+esc(costs.used)+'</strong></div><div class="auth-quota-cost"><span>'+authQuotaIcon('wallet')+esc(t('预估剩余'))+'</span><strong title="'+esc(costs.remaining)+'">'+esc(costs.remaining)+'</strong></div><div class="auth-quota-cost"><span>'+authQuotaIcon('trend')+esc(t('预计可用'))+'</span><strong title="'+esc(costs.available)+'">'+esc(costs.available)+'</strong></div>'+concurrentInput+'</div><div class="auth-quota-header-tools">'+weekSelect+'<div class="auth-quota-actions">'+warmupBtn+reloadBtn+'</div></div></header>'+(error ? '<div class="auth-quota-error">'+esc(error)+'</div>' : '')+'<div class="auth-quota-window-grid">'+cards+'</div></article>';
     }).join('');
+  }
+  function authQuotaWarmupStatus(warmup) {
+    const status = String(authQuotaValue(warmup, 'status') || '');
+    if (!status) return '';
+    const completed = authQuotaValue(warmup, 'completed_at') || authQuotaValue(warmup, 'started_at');
+    const labels = { running: '预热中', succeeded: '已预热', skipped: '未预热', failed: '预热失败' };
+    const error = authQuotaValue(warmup, 'error_code');
+    const errorLabels = { missing_api_key: '认证令牌缺失，请重新 OAuth 登录', xai_auth_required: 'XAI access token 已过期，请重新 OAuth 登录', unauthorized: '认证已失效，请重新 OAuth 登录', rate_limited: '上游限流', timeout: '请求超时', target_unavailable: '所选模型不可用', execution_failed: '上游执行失败' };
+    const model = String(authQuotaValue(warmup, 'model') || '').trim();
+    const input = Number(authQuotaValue(warmup, 'input_tokens') || 0);
+    const output = Number(authQuotaValue(warmup, 'output_tokens') || 0);
+    const observed = status === 'succeeded' && !!authQuotaValue(warmup, 'window_observed');
+    const usage = status === 'succeeded' ? ' · '+input.toLocaleString()+' in / '+output.toLocaleString()+' out' : '';
+    const errorText = errorLabels[error] || error;
+    const detail = [labels[status] || status, model, status === 'succeeded' ? (input+' input / '+output+' output tokens') : '', errorText].filter(Boolean).join(' · ');
+    if (status === 'failed') {
+      return '<p class="auth-quota-warmup-status is-failed" title="'+esc(detail)+'"><span>预热失败</span><em class="auth-quota-warmup-error">'+esc(errorText || '上游执行失败')+'</em>'+(completed ? '<b>'+esc(authQuotaShortTime(completed))+'</b>' : '')+'</p>';
+    }
+    return '<p class="auth-quota-warmup-status is-'+esc(status)+'" title="'+esc(detail)+'"><span>预热统计</span> '+esc(labels[status] || status)+(observed ? ' <i class="auth-quota-warmup-observed">窗口已更新</i>' : '')+(model ? ' <b>'+esc(model)+'</b>' : '')+(completed ? ' '+esc(authQuotaShortTime(completed)) : '')+(status === 'succeeded' ? '<em>'+esc(usage)+'</em>' : '')+'</p>';
   }
 
   async function loadAuthQuotas() {
@@ -5020,6 +5052,185 @@
     // returned item cannot be matched against the currently rendered card.
     if (refreshed && (!options || options.reconcile !== false) && seq === state.tabLoadSeq) await loadAuthQuotas();
     if (refreshed && (!options || !options.silent)) flash('认证额度已刷新', true);
+  }
+  async function warmupAuthQuota(itemKey, provider, authID, authIndex) {
+    if (!itemKey || state.authQuotaWarming[itemKey] || state.authQuotaRefreshing[itemKey]) return;
+    const seq = state.tabLoadSeq;
+    state.authQuotaWarming[itemKey] = true;
+    renderAuthQuotas();
+    try {
+      const models = await fetchAuthWarmupModels(authID);
+      const result = await api('POST', 'credit-manager/auth-quotas/warmup', { provider, auth_id: authID, auth_index: authIndex, models });
+      if (seq === state.tabLoadSeq) {
+        const item = authQuotaValue(result, 'item') || result;
+        if (item) replaceAuthQuotaItem(item);
+      }
+      // Clear the temporary button state before reload increments tabLoadSeq;
+      // otherwise the fresh card is rendered with the stale "warming" flag.
+      delete state.authQuotaWarming[itemKey];
+      if (seq === state.tabLoadSeq) {
+        try {
+          await loadAuthQuotas();
+        } catch (error) {
+          renderAuthQuotas();
+          throw error;
+        }
+      }
+      flash('认证额度预热已完成', true);
+    } finally {
+      delete state.authQuotaWarming[itemKey];
+      if (seq === state.tabLoadSeq) renderAuthQuotas();
+    }
+  }
+  async function fetchAuthWarmupModels(authID) {
+    const payload = await hostManagementGET('auth-files/models?name=' + encodeURIComponent(authID));
+    const ids = new Set();
+    addCatalogModelIDs(ids, payload && payload.models);
+    const models = [...ids].filter(Boolean).sort();
+    if (!models.length) throw new Error('该认证文件没有可用于预热的模型');
+    return models;
+  }
+  function setAuthWarmupField(id, value) {
+    const field = $(id);
+    if (field) field.value = value == null ? '' : String(value);
+  }
+  function authWarmupSchedules(settings) {
+    const schedules = authQuotaValue(settings, 'schedules');
+    return Array.isArray(schedules) ? schedules : [];
+  }
+  function authWarmupID() {
+    if (globalThis.crypto && globalThis.crypto.randomUUID) return globalThis.crypto.randomUUID();
+    return 'warmup-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2, 9);
+  }
+  function authWarmupAuthKey(auth) {
+    return encodeURIComponent(JSON.stringify({ provider: authQuotaValue(auth, 'provider') || '', auth_id: authQuotaValue(auth, 'auth_id') || '', auth_index: authQuotaValue(auth, 'auth_index') || '', label: authQuotaValue(auth, 'label') || authQuotaValue(auth, 'display_name') || '' }));
+  }
+  function parseAuthWarmupAuthKey(value) {
+    try { return JSON.parse(decodeURIComponent(value)); } catch (_) { return null; }
+  }
+  function authWarmupAuthOptions(selected) {
+    const available = state.authWarmupAuths || [];
+    const byKey = new Map(available.map(auth => [authWarmupAuthKey(auth), auth]));
+    (selected || []).forEach(auth => {
+      const key = authWarmupAuthKey(auth);
+      if (!byKey.has(key)) byKey.set(key, auth);
+    });
+    return [...byKey.entries()].sort((left, right) => String(authQuotaValue(left[1], 'label') || '').localeCompare(String(authQuotaValue(right[1], 'label') || '')));
+  }
+  function authWarmupModelOptions(selected) {
+    return [...new Set([...(state.availableModels || []), ...(selected || [])])].filter(Boolean).sort();
+  }
+  function authWarmupSelectOptions(values, selected) {
+    const selectedSet = new Set(selected || []);
+    return values.map(value => '<option value="'+esc(value)+'"'+(selectedSet.has(value) ? ' selected' : '')+'>'+esc(value)+'</option>').join('');
+  }
+  function authWarmupAuthSelectOptions(selected) {
+    const selectedSet = new Set((selected || []).map(authWarmupAuthKey));
+    return authWarmupAuthOptions(selected).map(([key, auth]) => {
+      const provider = String(authQuotaValue(auth, 'provider') || '').toUpperCase();
+      const label = authQuotaValue(auth, 'label') || authQuotaValue(auth, 'display_name') || authQuotaValue(auth, 'auth_id') || '未命名认证';
+      return '<option value="'+esc(key)+'"'+(selectedSet.has(key) ? ' selected' : '')+'>'+esc(label+(provider ? ' · '+provider : ''))+'</option>';
+    }).join('');
+  }
+  function authWarmupTaskSummary(card) {
+    const authCount = card.querySelector('.auth-warmup-task-auths').selectedOptions.length;
+    const modelCount = card.querySelector('.auth-warmup-task-models').selectedOptions.length;
+    const summary = card.querySelector('.auth-warmup-task-summary');
+    if (summary) summary.textContent = (authCount ? authCount+' 个认证' : '未选认证')+' · '+(modelCount ? modelCount+' 个模型' : '未选模型');
+  }
+  function renderAuthWarmupSchedules(schedules) {
+    const list = $('authWarmupScheduleList');
+    if (!list) return;
+    if (!schedules.length) {
+      list.innerHTML = '<div class="auth-warmup-empty"><strong>还没有定时预热任务</strong><span>添加任务后，分别选择认证文件、模型和目标时间。</span></div>';
+      return;
+    }
+    list.innerHTML = schedules.map((schedule, index) => {
+      const id = String(authQuotaValue(schedule, 'id') || authWarmupID());
+      const name = authQuotaValue(schedule, 'name') || ('预热任务 '+(index + 1));
+      const auths = Array.isArray(authQuotaValue(schedule, 'auths')) ? authQuotaValue(schedule, 'auths') : [];
+      const models = Array.isArray(authQuotaValue(schedule, 'models')) ? authQuotaValue(schedule, 'models') : [];
+      return '<article class="auth-warmup-task" data-schedule-id="'+esc(id)+'"><header class="auth-warmup-task-head"><div class="auth-warmup-task-title"><span class="auth-warmup-task-index">'+String(index + 1).padStart(2, '0')+'</span><input class="auth-warmup-task-name" value="'+esc(name)+'" aria-label="任务名称"/></div><div class="auth-warmup-task-actions"><label class="auth-warmup-task-toggle" title="启用此任务"><input class="auth-warmup-task-enabled" type="checkbox"'+(authQuotaValue(schedule, 'enabled') ? ' checked' : '')+'/><i aria-hidden="true"></i></label><button type="button" class="icon-btn auth-warmup-task-delete" title="删除任务" aria-label="删除 '+esc(name)+'"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision" aria-hidden="true"><path d="M3.35 4.8h9.3M6.1 2.6h3.8l.72 1.6H5.38l.72-1.6ZM5.05 4.8l.5 7.35c.04.58.52 1.04 1.1 1.04h2.7c.58 0 1.06-.46 1.1-1.04l.5-7.35M6.9 7v3.95M9.1 7v3.95"/></svg></button></div></header><div class="auth-warmup-task-grid"><label><span>时区</span><input class="auth-warmup-task-timezone" value="'+esc(authQuotaValue(schedule, 'timezone') || 'Asia/Shanghai')+'"/></label><label><span>预热时间</span><input class="auth-warmup-task-warmup-at" type="time" value="'+esc(authQuotaValue(schedule, 'warmup_at') || '03:50')+'"/></label></div><div class="auth-warmup-task-pickers"><label><span>认证文件</span><select class="auth-warmup-task-auths" multiple data-empty-text="选择认证文件" aria-label="认证文件">'+authWarmupAuthSelectOptions(auths)+'</select></label><label><span>预热模型</span><select class="auth-warmup-task-models" multiple data-empty-text="选择预热模型" aria-label="预热模型">'+authWarmupSelectOptions(authWarmupModelOptions(models), models)+'</select></label></div><footer><span class="auth-warmup-task-summary"></span><span>每个认证仅预热一个支持的已选模型</span></footer></article>';
+    }).join('');
+    initCustomControls(list);
+    list.querySelectorAll('.auth-warmup-task').forEach(authWarmupTaskSummary);
+  }
+  function newAuthWarmupSchedule() {
+    return { id: authWarmupID(), name: '预热任务', enabled: false, timezone: 'Asia/Shanghai', warmup_at: '03:50', auths: [], models: [] };
+  }
+  function applyAuthWarmupSettings(settings) {
+    setAuthWarmupField('authWarmupMaxParallel', authQuotaValue(settings, 'max_parallel') || 1);
+    setAuthWarmupField('authWarmupJitter', authQuotaValue(settings, 'stable_jitter_seconds') || 0);
+    renderAuthWarmupSchedules(authWarmupSchedules(settings));
+  }
+  async function loadAuthWarmupAuths() {
+    const firstPage = await api('GET', 'credit-manager/auth-quotas?page=1&page_size=24');
+    const items = [...(authQuotaValue(firstPage, 'items') || [])];
+    const pages = Math.max(1, Number(authQuotaValue(firstPage, 'total_pages') || 1));
+    for (let page = 2; page <= pages; page++) {
+      const result = await api('GET', 'credit-manager/auth-quotas?page='+page+'&page_size=24');
+      items.push(...(authQuotaValue(result, 'items') || []));
+    }
+    return items.map(item => ({ provider: authQuotaValue(item, 'provider'), auth_id: authQuotaValue(item, 'auth_id'), auth_index: authQuotaValue(item, 'auth_index'), label: authQuotaValue(item, 'display_name') }));
+  }
+  function closeAuthWarmupSettings(force) {
+    if (state.authWarmupSettingsSaving && !force) return;
+    const modal = $('authWarmupSettingsModal');
+    modal.classList.remove('open');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+  async function openAuthWarmupSettings() {
+    const modal = $('authWarmupSettingsModal');
+    const settings = await api('GET', 'credit-manager/auth-quotas/warmup/settings');
+    try {
+      state.availableModels = modelIDs(await fetchAvailableModels());
+    } catch (_) {
+      // Persisted selections remain editable even when the host catalog is temporarily unavailable.
+    }
+    try {
+      state.authWarmupAuths = await loadAuthWarmupAuths();
+    } catch (_) {
+      state.authWarmupAuths = [];
+    }
+    applyAuthWarmupSettings(settings);
+    modal.classList.add('open');
+    modal.setAttribute('aria-hidden', 'false');
+    $('btnAddAuthWarmupSchedule').focus();
+  }
+  function authWarmupNumber(id) {
+    const value = Number($(id).value);
+    return Number.isInteger(value) ? value : NaN;
+  }
+  function collectAuthWarmupSettings() {
+    const schedules = [...$('authWarmupScheduleList').querySelectorAll('.auth-warmup-task')].map(card => ({
+      id: card.getAttribute('data-schedule-id') || authWarmupID(),
+      name: String(card.querySelector('.auth-warmup-task-name').value || '').trim(),
+      enabled: card.querySelector('.auth-warmup-task-enabled').checked,
+      timezone: String(card.querySelector('.auth-warmup-task-timezone').value || '').trim(),
+      warmup_at: String(card.querySelector('.auth-warmup-task-warmup-at').value || '').trim(),
+      auths: [...card.querySelector('.auth-warmup-task-auths').selectedOptions].map(option => parseAuthWarmupAuthKey(option.value)).filter(Boolean),
+      models: [...card.querySelector('.auth-warmup-task-models').selectedOptions].map(option => option.value).filter(Boolean)
+    }));
+    return {
+      max_parallel: authWarmupNumber('authWarmupMaxParallel'),
+      stable_jitter_seconds: authWarmupNumber('authWarmupJitter'),
+      schedules
+    };
+  }
+  async function saveAuthWarmupSettings() {
+    if (state.authWarmupSettingsSaving) return;
+    state.authWarmupSettingsSaving = true;
+    const save = $('btnSaveAuthWarmupSettings');
+    if (save) save.disabled = true;
+    try {
+      const settings = await api('POST', 'credit-manager/auth-quotas/warmup/settings', collectAuthWarmupSettings());
+      applyAuthWarmupSettings(settings);
+      closeAuthWarmupSettings(true);
+      flash('额度窗口预热设置已保存', true);
+    } finally {
+      state.authWarmupSettingsSaving = false;
+      if (save) save.disabled = false;
+    }
   }
   function renderAuthQuotaPagination(result) {
     const el = $('authQuotaPagination');
@@ -5356,6 +5567,30 @@
   $('btnRefreshAuthQuotaPage').addEventListener('click', () => {
     refreshVisibleAuthQuotas().catch(e => flash(e.message, false));
   });
+  $('btnAuthWarmupSettings').addEventListener('click', () => {
+    openAuthWarmupSettings().catch(e => flash(e.message, false));
+  });
+  $('btnCloseAuthWarmupSettings').addEventListener('click', closeAuthWarmupSettings);
+  $('btnCancelAuthWarmupSettings').addEventListener('click', closeAuthWarmupSettings);
+  $('btnSaveAuthWarmupSettings').addEventListener('click', () => {
+    saveAuthWarmupSettings().catch(e => flash(e.message, false));
+  });
+  $('btnAddAuthWarmupSchedule').addEventListener('click', () => {
+    const schedules = collectAuthWarmupSettings().schedules;
+    schedules.push(newAuthWarmupSchedule());
+    renderAuthWarmupSchedules(schedules);
+  });
+  $('authWarmupScheduleList').addEventListener('click', event => {
+    const remove = event.target.closest('.auth-warmup-task-delete');
+    if (!remove) return;
+    const card = remove.closest('.auth-warmup-task');
+    const id = card && card.getAttribute('data-schedule-id');
+    renderAuthWarmupSchedules(collectAuthWarmupSettings().schedules.filter(schedule => schedule.id !== id));
+  });
+  $('authWarmupScheduleList').addEventListener('change', event => {
+    const card = event.target.closest('.auth-warmup-task');
+    if (card) authWarmupTaskSummary(card);
+  });
   $('btnAuthQuotaBatchPage').addEventListener('click', () => {
     saveAuthQuotaConcurrencyBatch('page').catch(e => flash(e.message, false));
   });
@@ -5404,6 +5639,13 @@
       const open = picker.classList.contains('is-open');
       closeAuthQuotaPeriodMenus(picker);
       setAuthQuotaPeriodMenu(picker, !open);
+      return;
+    }
+    const warmup = event.target.closest('.auth-quota-warmup');
+    if (warmup) {
+      try {
+        await warmupAuthQuota(warmup.getAttribute('data-item-key') || '', warmup.getAttribute('data-provider') || '', warmup.getAttribute('data-auth-id') || '', warmup.getAttribute('data-auth-index') || '');
+      } catch (e) { flash(e.message, false); }
       return;
     }
     const button = event.target.closest('.auth-quota-reload');

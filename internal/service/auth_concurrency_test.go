@@ -162,3 +162,19 @@ func TestPickAuthBindsOldestUnattributedReservation(t *testing.T) {
 		t.Fatalf("active = %d", got)
 	}
 }
+
+func TestAuthWarmupHoldExcludesNormalSchedulerSelection(t *testing.T) {
+	s := quotaService(t)
+	ctx := context.Background()
+	warmupAuth := store.AuthIdentity{AuthID: "warmup", Provider: "codex"}
+	if err := s.AcquireAuthWarmup(ctx, "run-1", warmupAuth); err != nil {
+		t.Fatal(err)
+	}
+	defer s.ReleaseAuthWarmup("run-1")
+	if _, handled, err := s.PickAuth(ctx, []AuthPickCandidate{{ID: "warmup", Provider: "codex"}}); !handled || !errors.Is(err, store.ErrConcurrentLimit) {
+		t.Fatalf("busy warmup target pick = handled:%t err:%v", handled, err)
+	}
+	if id, handled, err := s.PickAuth(ctx, []AuthPickCandidate{{ID: "warmup", Provider: "codex"}, {ID: "other", Provider: "codex"}}); err != nil || !handled || id != "other" {
+		t.Fatalf("fallback around warmup = (%q, %t, %v)", id, handled, err)
+	}
+}

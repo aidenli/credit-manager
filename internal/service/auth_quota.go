@@ -69,20 +69,21 @@ type AuthQuotaOverview struct {
 }
 
 type AuthQuotaOverviewItem struct {
-	AuthID                string            `json:"auth_id"`
-	AuthIndex             string            `json:"auth_index"`
-	Provider              string            `json:"provider"`
-	DisplayName           string            `json:"display_name"`
-	Status                string            `json:"status"`
-	LastAttemptAt         *time.Time        `json:"last_attempt_at,omitempty"`
-	LastSuccessAt         *time.Time        `json:"last_success_at,omitempty"`
-	LastErrorAt           *time.Time        `json:"last_error_at,omitempty"`
-	Error                 string            `json:"error,omitempty"`
-	Plan                  string            `json:"plan,omitempty"`
-	ResetCredits          *float64          `json:"reset_credits,omitempty"`
-	MaxConcurrentRequests int64             `json:"max_concurrent_requests"`
-	ActiveRequests        int64             `json:"active_requests"`
-	Windows               []AuthQuotaWindow `json:"windows"`
+	AuthID                string               `json:"auth_id"`
+	AuthIndex             string               `json:"auth_index"`
+	Provider              string               `json:"provider"`
+	DisplayName           string               `json:"display_name"`
+	Status                string               `json:"status"`
+	LastAttemptAt         *time.Time           `json:"last_attempt_at,omitempty"`
+	LastSuccessAt         *time.Time           `json:"last_success_at,omitempty"`
+	LastErrorAt           *time.Time           `json:"last_error_at,omitempty"`
+	Error                 string               `json:"error,omitempty"`
+	Plan                  string               `json:"plan,omitempty"`
+	ResetCredits          *float64             `json:"reset_credits,omitempty"`
+	MaxConcurrentRequests int64                `json:"max_concurrent_requests"`
+	ActiveRequests        int64                `json:"active_requests"`
+	Warmup                *store.AuthWarmupRun `json:"warmup,omitempty"`
+	Windows               []AuthQuotaWindow    `json:"windows"`
 }
 type AuthQuotaLocalUsage struct {
 	RequestCount          int64 `json:"request_count"`
@@ -183,6 +184,9 @@ func (s *Service) AuthQuotaOverview(ctx context.Context, callback string, filter
 	}
 	_, totalPages, _, _ = authQuotaPageBounds(page, filter.PageSize, total)
 	s.attachAuthConcurrency(ctx, items)
+	for i := range items {
+		items[i] = s.attachAuthWarmupRun(ctx, items[i])
+	}
 	return AuthQuotaOverview{
 		Items:      items,
 		Page:       page,
@@ -208,9 +212,20 @@ func (s *Service) RefreshAuthQuota(ctx context.Context, callback, provider, auth
 		if !ok {
 			continue
 		}
-		return s.withAuthConcurrency(ctx, item), nil
+		return s.attachAuthWarmupRun(ctx, s.withAuthConcurrency(ctx, item)), nil
 	}
 	return AuthQuotaOverviewItem{}, fmt.Errorf("auth quota not found")
+}
+
+func (s *Service) attachAuthWarmupRun(ctx context.Context, item AuthQuotaOverviewItem) AuthQuotaOverviewItem {
+	if s == nil || strings.TrimSpace(item.Provider) == "" || strings.TrimSpace(item.AuthID) == "" {
+		return item
+	}
+	runs, err := s.store.ListAuthWarmupRuns(ctx, quotaProvider(item.Provider), item.AuthID, 1)
+	if err == nil && len(runs) > 0 {
+		item.Warmup = &runs[0]
+	}
+	return item
 }
 
 func (s *Service) authQuotaFiles(ctx context.Context) (AuthQuotaSource, []AuthQuotaFile, error) {

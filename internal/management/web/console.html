@@ -573,6 +573,7 @@
           <button type="button" class="btn" id="btnAuthQuotaBatchPage"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="m5.6 8.2 1.7 1.7 3.1-3.5"/></svg>应用到本页</button>
           <button type="button" class="btn ghost" id="btnAuthQuotaBatchFilter"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 3.5h11L9.3 8.4v3.4l-2.6 1.4V8.4z"/></svg>应用到筛选</button>
         </div>
+        <button type="button" class="btn ghost" id="btnAuthWarmupSettings"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.3 1.8-4.6 6h3.45l-1.1 6.4 4.2-6H7.9l1.4-6.4Z"/></svg>预热设置</button>
         <button type="button" class="btn" id="btnRefreshAuthQuotaPage"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.2 8A5.2 5.2 0 1 1 11.7 4.3M13.4 1.8v2.9h-2.9"/></svg>刷新本页</button>
       </div>
     </div>
@@ -647,6 +648,21 @@
           <button class="btn primary" id="btnConfirmAuthQuotaBatch">确认应用</button>
         </div>
       </div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="authWarmupSettingsModal" aria-hidden="true">
+    <section class="connection-modal auth-warmup-settings-modal" role="dialog" aria-modal="true" aria-labelledby="authWarmupSettingsTitle">
+      <div class="modal-header">
+        <div><h2 class="panel-title" id="authWarmupSettingsTitle">额度窗口预热</h2><p class="hint">对启用的平台认证发送最小真实请求，提前启动其滚动额度周期。仅在确认该平台窗口行为后启用。</p></div>
+        <button class="modal-close" id="btnCloseAuthWarmupSettings" aria-label="关闭预热设置"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg></button>
+      </div>
+      <div class="modal-body auth-warmup-settings-form">
+        <div class="auth-warmup-intro"><div><strong>定时任务</strong><p>每条任务独立选择认证文件、模型与运行时间。认证只会使用它支持的一个已选模型。</p></div><button type="button" class="btn primary sm" id="btnAddAuthWarmupSchedule">添加任务</button></div>
+        <div id="authWarmupScheduleList" class="auth-warmup-schedule-list"></div>
+        <details class="auth-warmup-advanced"><summary>执行保护 <span>并行与稳定抖动</span></summary><div class="form-grid auth-warmup-advanced-grid"><label><span>最大并行</span><input id="authWarmupMaxParallel" type="number" min="1" max="16" value="1"/></label><label><span>稳定抖动（秒）</span><input id="authWarmupJitter" type="number" min="0" max="900" value="180"/></label></div></details>
+      </div>
+      <div class="modal-footer"><div class="modal-actions"><button class="btn ghost" id="btnCancelAuthWarmupSettings">取消</button><button class="btn primary" id="btnSaveAuthWarmupSettings">保存设置</button></div></div>
     </section>
   </div>
 

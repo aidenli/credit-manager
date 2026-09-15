@@ -25,6 +25,11 @@ func handleUsage(raw []byte) ([]byte, error) {
 	if !ok {
 		return okEnvelope(map[string]any{})
 	}
+	if isWarmupUsage(record) {
+		// A synthetic warmup has no customer reservation. Never let the normal
+		// recent-call fallback attach its usage to a real customer ledger row.
+		return okEnvelope(map[string]any{})
+	}
 	auth := authIdentityFromUsage(record)
 	if !auth.Empty() {
 		auth = enrichAuthIdentity(auth)

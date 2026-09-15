@@ -17,7 +17,7 @@ import (
 const (
 	PluginID      = "credit-manager"
 	PluginName    = "CPA Credit Manager"
-	PluginVersion = "1.7.5"
+	PluginVersion = "1.7.6"
 	// CallerScopeMetadataKey mirrors sdk/cliproxy/executor.CallerScopeMetadataKey.
 	CallerScopeMetadataKey = "caller_scope"
 )
@@ -32,11 +32,17 @@ type Service struct {
 	authMu             authMutex
 	authCond           *sync.Cond
 	authPending        map[string]*pendingAuthCapture
+	warmupHolds        map[string]store.AuthIdentity
 	cleanupMu          sync.Mutex
 	lastCleanup        time.Time
 	authQuotaMu        sync.RWMutex
 	authQuotaSource    AuthQuotaSource
 	authQuotaRefreshMu sync.Mutex
+	warmupMu           sync.RWMutex
+	warmupExecutor     AuthWarmupExecutor
+	warmupCancel       context.CancelFunc
+	warmupSem          chan struct{}
+	warmupSemLimit     int
 	authPickCursor     map[string]int
 	directorySyncer    ModelDirectorySyncer
 	directoryIDsMu     sync.Mutex
@@ -101,7 +107,7 @@ func Open(ctx context.Context, cfg config.Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	svc := &Service{cfg: cfg, peppers: peppers, store: st, authPending: make(map[string]*pendingAuthCapture)}
+	svc := &Service{cfg: cfg, peppers: peppers, store: st, authPending: make(map[string]*pendingAuthCapture), warmupHolds: make(map[string]store.AuthIdentity)}
 	svc.authMu.init()
 	svc.authCond = sync.NewCond(&svc.authMu)
 	if err := svc.ensureBootstrap(ctx); err != nil {
@@ -120,6 +126,7 @@ func (s *Service) Close() error {
 	if s == nil || s.store == nil {
 		return nil
 	}
+	s.StopAuthWarmup()
 	return s.store.Close()
 }
 
@@ -183,8 +190,10 @@ func Configure(ctx context.Context, rawYAML []byte) error {
 			return fmt.Errorf("changing database path while CPA is running is not supported; restart CPA first")
 		}
 		// Keep the locked SQLite writer. Opening a second handle deadlocks on *.db.lock.
-		next := &Service{cfg: cfg, peppers: peppers, store: old.store, authMu: old.authMu, authCond: old.authCond, authPending: old.authPending}
+		next := &Service{cfg: cfg, peppers: peppers, store: old.store, authCond: old.authCond, authPending: old.authPending, warmupHolds: old.warmupHolds}
+		next.authMu.shared = old.authMu.shared
 		next.SetAuthQuotaSource(old.authQuotaSourceValue())
+		next.SetAuthWarmupExecutor(old.authWarmupExecutorValue())
 		next.SetModelDirectorySyncer(old.directorySyncer)
 		old.directoryIDsMu.Lock()
 		next.lastDirectoryIDs = append([]string(nil), old.lastDirectoryIDs...)
@@ -198,6 +207,8 @@ func Configure(ctx context.Context, rawYAML []byte) error {
 		if !current.CompareAndSwap(old, next) {
 			return fmt.Errorf("service replaced concurrently during reconfigure")
 		}
+		old.StopAuthWarmup()
+		next.StartAuthWarmup()
 		next.RefreshModelDirectory(ctx)
 		// Leave old.store attached: in-flight callers may still hold *old.
 		// Ownership of Close stays with the published Service / Shutdown.
@@ -209,7 +220,7 @@ func Configure(ctx context.Context, rawYAML []byte) error {
 	if err != nil {
 		return err
 	}
-	svc := &Service{cfg: cfg, peppers: peppers, store: st, authPending: make(map[string]*pendingAuthCapture)}
+	svc := &Service{cfg: cfg, peppers: peppers, store: st, authPending: make(map[string]*pendingAuthCapture), warmupHolds: make(map[string]store.AuthIdentity)}
 	svc.authMu.init()
 	svc.authCond = sync.NewCond(&svc.authMu)
 	if err := svc.ensureBootstrap(ctx); err != nil {

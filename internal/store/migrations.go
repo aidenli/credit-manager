@@ -327,6 +327,78 @@ var migrations = []migration{
 			 WHERE status = 'held' AND execution_finished_at_unix_ms IS NULL`,
 		},
 	},
+	{
+		version: 21,
+		name:    "auth quota window warmup runs",
+		up: []string{
+			`CREATE TABLE IF NOT EXISTS auth_warmup_runs (
+				id TEXT PRIMARY KEY,
+				provider TEXT NOT NULL,
+				auth_id TEXT NOT NULL,
+				auth_index TEXT NOT NULL DEFAULT '',
+				model TEXT NOT NULL,
+				schedule_key TEXT NOT NULL,
+				status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'skipped', 'failed')),
+				started_at_unix_ms INTEGER NOT NULL,
+				completed_at_unix_ms INTEGER,
+				input_tokens INTEGER NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
+				output_tokens INTEGER NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
+				window_observed INTEGER NOT NULL DEFAULT 0 CHECK (window_observed IN (0, 1)),
+				error_code TEXT NOT NULL DEFAULT '',
+				UNIQUE (provider, auth_id, schedule_key)
+			)`,
+			`CREATE INDEX IF NOT EXISTS auth_warmup_runs_auth_started_idx
+				ON auth_warmup_runs(provider, auth_id, started_at_unix_ms DESC)`,
+		},
+	},
+	{
+		version: 22,
+		name:    "auth quota window warmup settings",
+		up: []string{
+			`CREATE TABLE IF NOT EXISTS auth_warmup_settings (
+				id INTEGER PRIMARY KEY CHECK (id = 1),
+				enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+				timezone TEXT NOT NULL,
+				target_ready_at TEXT NOT NULL,
+				max_parallel INTEGER NOT NULL,
+				timeout_seconds INTEGER NOT NULL,
+				stable_jitter_seconds INTEGER NOT NULL,
+				max_runs_per_auth_per_day INTEGER NOT NULL,
+				providers_json TEXT NOT NULL,
+				updated_at_unix_ms INTEGER NOT NULL
+			)`,
+		},
+	},
+	{
+		version: 23,
+		name:    "discard prerelease warmup settings",
+		up: []string{
+			`DELETE FROM auth_warmup_settings`,
+		},
+	},
+	{
+		version: 24,
+		name:    "settle interrupted warmup runs",
+		up: []string{
+			`UPDATE auth_warmup_runs
+			 SET status = 'failed', completed_at_unix_ms = started_at_unix_ms, error_code = 'interrupted'
+			 WHERE status = 'running'`,
+		},
+	},
+	{
+		version: 25,
+		name:    "normalize warmup settings schema",
+		up: []string{
+			`DROP TABLE IF EXISTS auth_warmup_settings`,
+			`CREATE TABLE auth_warmup_settings (
+				id INTEGER PRIMARY KEY CHECK (id = 1),
+				max_parallel INTEGER NOT NULL,
+				stable_jitter_seconds INTEGER NOT NULL,
+				schedules_json TEXT NOT NULL,
+				updated_at_unix_ms INTEGER NOT NULL
+			)`,
+		},
+	},
 }
 
 // Migrate applies every pending migration transactionally.
