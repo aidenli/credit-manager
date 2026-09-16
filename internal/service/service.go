@@ -17,7 +17,7 @@ import (
 const (
 	PluginID      = "credit-manager"
 	PluginName    = "CPA Credit Manager"
-	PluginVersion = "1.7.6"
+	PluginVersion = "1.8.0"
 	// CallerScopeMetadataKey mirrors sdk/cliproxy/executor.CallerScopeMetadataKey.
 	CallerScopeMetadataKey = "caller_scope"
 )
@@ -41,7 +41,7 @@ type Service struct {
 	warmupMu           sync.RWMutex
 	warmupExecutor     AuthWarmupExecutor
 	warmupCancel       context.CancelFunc
-	warmupSem          chan struct{}
+	warmupSems         map[string]chan struct{}
 	warmupSemLimit     int
 	authPickCursor     map[string]int
 	directorySyncer    ModelDirectorySyncer

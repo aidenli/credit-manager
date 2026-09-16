@@ -64,6 +64,51 @@ func TestWarmupScheduleKeysAreIndependent(t *testing.T) {
 	}
 }
 
+func TestScheduledWarmupKeyFollowsClockNotDay(t *testing.T) {
+	now := time.Date(2026, time.September, 16, 11, 49, 0, 0, time.UTC)
+	morning := store.AuthWarmupSchedule{ID: "same", Timezone: "UTC", WarmupAt: "11:11"}
+	later := store.AuthWarmupSchedule{ID: "same", Timezone: "UTC", WarmupAt: "11:49"}
+	if scheduledWarmupKey(morning, now) == scheduledWarmupKey(later, now) {
+		t.Fatal("changing warmup time must start a new run instead of reusing the day")
+	}
+}
+
+func TestAuthWarmupIsDueHonorsWeeklyWeekday(t *testing.T) {
+	settings := store.DefaultAuthWarmupSettings()
+	settings.StableJitterSeconds = 0
+	schedule := store.AuthWarmupSchedule{ID: "weekly", Frequency: store.AuthWarmupFrequencyWeekly, Weekdays: []int{int(time.Monday)}, Timezone: "UTC", WarmupAt: "11:00"}
+	file := AuthQuotaFile{ID: "auth-1"}
+	monday := time.Date(2026, time.September, 14, 11, 1, 0, 0, time.UTC)
+	tuesday := time.Date(2026, time.September, 15, 11, 1, 0, 0, time.UTC)
+	if !authWarmupIsDue(settings, schedule, file, monday) {
+		t.Fatal("weekly Monday must be due on Monday")
+	}
+	if authWarmupIsDue(settings, schedule, file, tuesday) {
+		t.Fatal("weekly Monday must not run on Tuesday")
+	}
+	schedule.Weekdays = []int{int(time.Monday), int(time.Wednesday)}
+	wednesday := time.Date(2026, time.September, 16, 11, 1, 0, 0, time.UTC)
+	if !authWarmupIsDue(settings, schedule, file, monday) || !authWarmupIsDue(settings, schedule, file, wednesday) {
+		t.Fatal("weekly multi-select must run on each selected weekday")
+	}
+	if authWarmupIsDue(settings, schedule, file, tuesday) {
+		t.Fatal("weekly multi-select must not run on an unselected weekday")
+	}
+	schedule.Frequency = store.AuthWarmupFrequencyDaily
+	if !authWarmupIsDue(settings, schedule, file, tuesday) {
+		t.Fatal("daily schedule must still run on Tuesday")
+	}
+	schedule.Frequency = store.AuthWarmupFrequencyOnce
+	schedule.WarmupOn = "2026-09-15"
+	if !authWarmupIsDue(settings, schedule, file, tuesday) {
+		t.Fatal("once schedule must run on the selected date")
+	}
+	schedule.WarmupOn = "2026-09-16"
+	if authWarmupIsDue(settings, schedule, file, tuesday) {
+		t.Fatal("once schedule must not run on a different date")
+	}
+}
+
 func TestManualWarmupRequiresModelsFromAuthFile(t *testing.T) {
 	s := quotaService(t)
 	if _, err := s.WarmupAuthQuota(context.Background(), "claude", "auth-1", "idx-1", nil); err == nil {
@@ -105,7 +150,7 @@ func TestWarmupStoreContextSurvivesSchedulerCancellation(t *testing.T) {
 	}
 }
 
-func TestScheduledWarmupSkipsActiveWindowWithoutClaim(t *testing.T) {
+func TestScheduledWarmupRunsWithActiveShortWindow(t *testing.T) {
 	s := quotaService(t)
 	src := &fakeQuotaSource{
 		files:     []AuthQuotaFile{{ID: "auth-1", AuthIndex: "idx-1", Provider: "codex"}},
@@ -113,18 +158,173 @@ func TestScheduledWarmupSkipsActiveWindowWithoutClaim(t *testing.T) {
 		responses: map[string]string{"chatgpt.com": `{"rate_limit":{"primary_window":{"used_percent":20,"limit_window_seconds":3600,"reset_at":4102444800}}}`},
 	}
 	s.SetAuthQuotaSource(src)
-	executor := &fakeAuthWarmupExecutor{}
+	executor := &fakeAuthWarmupExecutor{result: AuthWarmupResult{Model: "gpt-5.6-luna", Usage: money.TokenUsage{Input: 3, Output: 1}}}
 	s.SetAuthWarmupExecutor(executor)
-	settings := store.DefaultAuthWarmupSettings()
 	schedule := store.AuthWarmupSchedule{ID: "scheduled", Models: []string{"gpt-5.6-luna"}}
-	if _, err := s.warmupAuthQuota(context.Background(), "", "codex", "auth-1", "idx-1", "scheduled:today", true, settings, schedule); err != nil {
+	item, err := s.warmupAuthQuota(context.Background(), "", "codex", "auth-1", "idx-1", "scheduled:today", schedule)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(executor.calls) != 0 {
-		t.Fatalf("active quota window must skip execution, calls=%d", len(executor.calls))
+	if len(executor.calls) != 1 || executor.calls[0].Auth.AuthID != "auth-1" {
+		t.Fatalf("active short window must not skip scheduled warmup, calls=%#v", executor.calls)
+	}
+	if item.Warmup == nil || item.Warmup.Status != "succeeded" {
+		t.Fatalf("warmup item = %#v", item)
 	}
 	runs, err := s.Store().ListAuthWarmupRuns(context.Background(), "codex", "auth-1", 10)
-	if err != nil || len(runs) != 0 {
-		t.Fatalf("active window skip must not claim schedule slot: %#v, %v", runs, err)
+	if err != nil || len(runs) != 1 || runs[0].Status != "succeeded" {
+		t.Fatalf("scheduled warmup must claim the slot: %#v, %v", runs, err)
 	}
+}
+
+func TestOnceAuthWarmupDisablesSchedule(t *testing.T) {
+	s := quotaService(t)
+	src := &fakeQuotaSource{
+		files:     []AuthQuotaFile{{ID: "auth-1", AuthIndex: "idx-1", Provider: "codex"}},
+		auth:      quotaJSON("codex"),
+		responses: map[string]string{"chatgpt.com": `{"rate_limit":{"primary_window":{"used_percent":20,"limit_window_seconds":3600,"reset_at":4102444800}}}`},
+	}
+	s.SetAuthQuotaSource(src)
+	s.SetAuthWarmupExecutor(&fakeAuthWarmupExecutor{result: AuthWarmupResult{Model: "gpt-5.6-luna", Usage: money.TokenUsage{Input: 1, Output: 1}}})
+	schedule := store.AuthWarmupSchedule{
+		ID: "once-task", Enabled: true, Frequency: store.AuthWarmupFrequencyOnce, Timezone: "UTC", WarmupAt: "11:00", WarmupOn: "2026-09-16",
+		Auths: []store.AuthWarmupAuthTarget{{Provider: "codex", AuthID: "auth-1", AuthIndex: "idx-1"}}, Models: []string{"gpt-5.6-luna"},
+	}
+	settings := store.DefaultAuthWarmupSettings()
+	settings.Schedules = []store.AuthWarmupSchedule{schedule}
+	if _, err := s.Store().UpsertAuthWarmupSettings(context.Background(), settings); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.warmupAuthQuota(context.Background(), "", "codex", "auth-1", "idx-1", "scheduled:once", schedule); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := s.Store().GetAuthWarmupSettings(context.Background())
+	if err != nil || len(loaded.Schedules) != 1 || loaded.Schedules[0].Enabled {
+		t.Fatalf("once schedule must disable after execution: %#v, %v", loaded.Schedules, err)
+	}
+}
+
+type blockingAuthWarmupExecutor struct {
+	started chan string
+	release chan struct{}
+	result  AuthWarmupResult
+}
+
+func (e *blockingAuthWarmupExecutor) ExecuteAuthWarmup(_ context.Context, request AuthWarmupRequest) (AuthWarmupResult, error) {
+	e.started <- request.Auth.AuthID
+	<-e.release
+	return e.result, nil
+}
+
+func TestScheduledWarmupRunsDifferentAuthsConcurrently(t *testing.T) {
+	s := quotaService(t)
+	src := &fakeQuotaSource{
+		files: []AuthQuotaFile{
+			{ID: "auth-a", AuthIndex: "idx-a", Provider: "claude"},
+			{ID: "auth-b", AuthIndex: "idx-b", Provider: "claude"},
+		},
+		auth:      quotaJSON("claude"),
+		responses: map[string]string{"oauth/usage": `{"five_hour":{"utilization":0.1,"resets_at":"2030-01-01T00:00:00Z"}}`},
+	}
+	s.SetAuthQuotaSource(src)
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	s.SetAuthWarmupExecutor(&blockingAuthWarmupExecutor{
+		started: started,
+		release: release,
+		result:  AuthWarmupResult{Model: "claude-haiku", Usage: money.TokenUsage{Input: 1, Output: 1}},
+	})
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.September, 16, 11, 10, 30, 0, location)
+	settings := store.AuthWarmupSettings{
+		MaxParallel:         1,
+		StableJitterSeconds: 0,
+		Schedules: []store.AuthWarmupSchedule{
+			{ID: "task-a", Enabled: true, Timezone: "Asia/Shanghai", WarmupAt: "11:10", Auths: []store.AuthWarmupAuthTarget{{Provider: "claude", AuthID: "auth-a", AuthIndex: "idx-a"}}, Models: []string{"claude-haiku"}},
+			{ID: "task-b", Enabled: true, Timezone: "Asia/Shanghai", WarmupAt: "11:10", Auths: []store.AuthWarmupAuthTarget{{Provider: "claude", AuthID: "auth-b", AuthIndex: "idx-b"}}, Models: []string{"claude-haiku"}},
+		},
+	}
+	if _, err := s.Store().UpsertAuthWarmupSettings(context.Background(), settings); err != nil {
+		t.Fatal(err)
+	}
+	s.runScheduledAuthWarmups(context.Background(), now)
+	seen := map[string]struct{}{}
+	deadline := time.After(5 * time.Second)
+	for len(seen) < 2 {
+		select {
+		case id := <-started:
+			seen[id] = struct{}{}
+		case <-deadline:
+			t.Fatalf("different credentials must start concurrently with per-auth parallel=1: %#v", seen)
+		}
+	}
+	close(release)
+	waitAuthWarmupFinished(t, s, "claude", "auth-a")
+	waitAuthWarmupFinished(t, s, "claude", "auth-b")
+}
+
+func TestScheduledWarmupCapsSameAuthParallel(t *testing.T) {
+	s := quotaService(t)
+	src := &fakeQuotaSource{
+		files:     []AuthQuotaFile{{ID: "auth-a", AuthIndex: "idx-a", Provider: "claude"}},
+		auth:      quotaJSON("claude"),
+		responses: map[string]string{"oauth/usage": `{"five_hour":{"utilization":0.1,"resets_at":"2030-01-01T00:00:00Z"}}`},
+	}
+	s.SetAuthQuotaSource(src)
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	s.SetAuthWarmupExecutor(&blockingAuthWarmupExecutor{
+		started: started,
+		release: release,
+		result:  AuthWarmupResult{Model: "claude-haiku", Usage: money.TokenUsage{Input: 1, Output: 1}},
+	})
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.September, 16, 11, 10, 30, 0, location)
+	settings := store.AuthWarmupSettings{
+		MaxParallel:         1,
+		StableJitterSeconds: 0,
+		Schedules: []store.AuthWarmupSchedule{
+			{ID: "task-a", Enabled: true, Timezone: "Asia/Shanghai", WarmupAt: "11:10", Auths: []store.AuthWarmupAuthTarget{{Provider: "claude", AuthID: "auth-a", AuthIndex: "idx-a"}}, Models: []string{"claude-haiku"}},
+			{ID: "task-b", Enabled: true, Timezone: "Asia/Shanghai", WarmupAt: "11:10", Auths: []store.AuthWarmupAuthTarget{{Provider: "claude", AuthID: "auth-a", AuthIndex: "idx-a"}}, Models: []string{"claude-haiku"}},
+		},
+	}
+	if _, err := s.Store().UpsertAuthWarmupSettings(context.Background(), settings); err != nil {
+		t.Fatal(err)
+	}
+	s.runScheduledAuthWarmups(context.Background(), now)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first same-auth warmup did not start")
+	}
+	select {
+	case extra := <-started:
+		close(release)
+		t.Fatalf("same credential exceeded max parallel: %s", extra)
+	case <-time.After(250 * time.Millisecond):
+	}
+	close(release)
+	waitAuthWarmupFinished(t, s, "claude", "auth-a")
+}
+
+func waitAuthWarmupFinished(t *testing.T, s *Service, provider, authID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		runs, err := s.Store().ListAuthWarmupRuns(context.Background(), provider, authID, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(runs) > 0 && runs[0].Status != "running" {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("warmup for %s/%s did not finish", provider, authID)
 }

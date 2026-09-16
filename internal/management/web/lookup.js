@@ -297,6 +297,11 @@
       wrapper.querySelectorAll('.custom-option').forEach(option => option.classList.toggle('selected', option.dataset.value === control.value));
       return;
     }
+    if (control.type === 'time') {
+      const time = parseTimeValue(control.value);
+      trigger.querySelector('.custom-control-value').textContent = time ? formatTimeValue(time.hours, time.minutes) : t('选择时间');
+      return;
+    }
     const date = parseDateTimeLocal(control.value);
     trigger.querySelector('.custom-control-value').textContent = date
       ? new Intl.DateTimeFormat(locale || 'zh-CN', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false }).format(date)
@@ -498,8 +503,81 @@
     input.addEventListener('change', () => refreshCustomControl(input));
     refreshCustomControl(input);
   }
+  function parseTimeValue(value) {
+    const match = String(value || '').trim().match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return null;
+    return { hours: Math.min(23, Number(match[1]) || 0), minutes: Math.min(59, Number(match[2]) || 0) };
+  }
+  function formatTimeValue(hours, minutes) {
+    return padDatePart(hours) + ':' + padDatePart(minutes);
+  }
+  function buildCustomTimeInput(input) {
+    if (input.closest('.custom-control')) return;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'custom-control custom-time-control';
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'custom-control-trigger custom-time-trigger';
+    const value = document.createElement('span');
+    value.className = 'custom-control-value';
+    trigger.appendChild(value);
+    const panel = document.createElement('div');
+    panel.className = 'custom-control-panel custom-time-panel';
+    panel.hidden = true;
+    input.classList.add('native-control');
+    input.parentNode.insertBefore(wrapper, input);
+    wrapper.append(input, trigger, panel);
+    const renderTimePanel = () => {
+      const selected = parseTimeValue(input.value) || { hours: 0, minutes: 0 };
+      panel.replaceChildren();
+      const columns = document.createElement('div');
+      columns.className = 'custom-time-columns';
+      const column = (count, current, onPick) => {
+        const list = document.createElement('div');
+        list.className = 'custom-time-col';
+        for (let index = 0; index < count; index += 1) {
+          const option = document.createElement('button');
+          option.type = 'button';
+          option.className = 'custom-time-option' + (index === current ? ' selected' : '');
+          option.textContent = padDatePart(index);
+          option.addEventListener('click', event => {
+            event.stopPropagation();
+            onPick(index);
+          });
+          list.appendChild(option);
+        }
+        requestAnimationFrame(() => {
+          const active = list.querySelector('.selected');
+          if (active) list.scrollTop = Math.max(0, active.offsetTop - list.clientHeight / 2 + active.clientHeight / 2);
+        });
+        return list;
+      };
+      const apply = (hours, minutes) => {
+        input.value = formatTimeValue(hours, minutes);
+        dispatchControlChange(input);
+        refreshCustomControl(input);
+        renderTimePanel();
+      };
+      columns.append(
+        column(24, selected.hours, hours => apply(hours, selected.minutes)),
+        column(60, selected.minutes, minutes => apply(selected.hours, minutes))
+      );
+      panel.appendChild(columns);
+    };
+    trigger.addEventListener('click', () => {
+      if (input.disabled) return;
+      const opening = !wrapper.classList.contains('open');
+      closeCustomControls(wrapper);
+      wrapper.classList.toggle('open', opening);
+      panel.hidden = !opening;
+      if (opening) renderTimePanel();
+    });
+    input.addEventListener('change', () => refreshCustomControl(input));
+    refreshCustomControl(input);
+  }
   function initCustomControls(root) {
     (root || document).querySelectorAll('select:not(.native-control)').forEach(buildCustomSelect);
+    (root || document).querySelectorAll('input[type="time"]:not(.native-control)').forEach(buildCustomTimeInput);
     (root || document).querySelectorAll('input[type="datetime-local"]:not(.native-control)').forEach(buildCustomDateInput);
   }
   function refreshCustomControls() { document.querySelectorAll('.native-control').forEach(refreshCustomControl); }

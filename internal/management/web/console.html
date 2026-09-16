@@ -658,9 +658,9 @@
         <button class="modal-close" id="btnCloseAuthWarmupSettings" aria-label="关闭预热设置"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg></button>
       </div>
       <div class="modal-body auth-warmup-settings-form">
-        <div class="auth-warmup-intro"><div><strong>定时任务</strong><p>每条任务独立选择认证文件、模型与运行时间。认证只会使用它支持的一个已选模型。</p></div><button type="button" class="btn primary sm" id="btnAddAuthWarmupSchedule">添加任务</button></div>
+        <div class="auth-warmup-intro"><div><strong>定时任务</strong><p>每条任务独立选择每天、每周或单次、认证文件、模型与运行时间。单次任务执行后会自动停用。</p></div><button type="button" class="btn primary sm" id="btnAddAuthWarmupSchedule">添加任务</button></div>
         <div id="authWarmupScheduleList" class="auth-warmup-schedule-list"></div>
-        <details class="auth-warmup-advanced"><summary>执行保护 <span>并行与稳定抖动</span></summary><div class="form-grid auth-warmup-advanced-grid"><label><span>最大并行</span><input id="authWarmupMaxParallel" type="number" min="1" max="16" value="1"/></label><label><span>稳定抖动（秒）</span><input id="authWarmupJitter" type="number" min="0" max="900" value="180"/></label></div></details>
+        <details class="auth-warmup-advanced"><summary>执行保护 <span>并行与稳定抖动</span></summary><div class="form-grid auth-warmup-advanced-grid"><label><span>每个认证最大并行</span><input id="authWarmupMaxParallel" type="number" min="1" max="16" value="10" title="同一认证文件同时进行的预热数。不同认证互不影响。"/></label><label><span>稳定抖动（秒）</span><input id="authWarmupJitter" type="number" min="0" max="900" value="30" title="在预热时刻之后最多推迟这么多秒，避免整点撞车。不同认证仍按各自哈希错开。"/></label></div></details>
       </div>
       <div class="modal-footer auth-warmup-settings-footer"><div class="modal-actions"><button class="btn ghost" id="btnCancelAuthWarmupSettings">取消</button><button class="btn primary" id="btnSaveAuthWarmupSettings">保存设置</button></div></div>
     </section>

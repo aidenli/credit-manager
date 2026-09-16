@@ -26,8 +26,8 @@ type AuthWarmupRun struct {
 	ErrorCode      string     `json:"error_code,omitempty"`
 }
 
-// StartAuthWarmupRun atomically claims one provider/auth schedule slot. The
-// false result means a run for the same slot was already recorded.
+// StartAuthWarmupRun atomically claims one provider/auth occurrence. The
+// false result means this due clock was already recorded.
 func (s *Store) StartAuthWarmupRun(ctx context.Context, run AuthWarmupRun) (bool, error) {
 	run.ID = strings.TrimSpace(run.ID)
 	run.Provider = strings.TrimSpace(run.Provider)

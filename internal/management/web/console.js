@@ -1157,6 +1157,11 @@
       });
       return;
     }
+    if (control.type === 'time') {
+      const time = parseTimeValue(control.value);
+      trigger.querySelector('.custom-control-value').textContent = time ? formatTimeValue(time.hours, time.minutes) : t('选择时间');
+      return;
+    }
     const date = parseDateTimeLocal(control.value);
     trigger.querySelector('.custom-control-value').textContent = date
       ? new Intl.DateTimeFormat(state.locale || 'zh-CN', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false }).format(date)
@@ -1369,8 +1374,81 @@
     refreshCustomControl(input);
   }
 
+  function parseTimeValue(value) {
+    const match = String(value || '').trim().match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return null;
+    return { hours: Math.min(23, Number(match[1]) || 0), minutes: Math.min(59, Number(match[2]) || 0) };
+  }
+  function formatTimeValue(hours, minutes) {
+    return padDatePart(hours) + ':' + padDatePart(minutes);
+  }
+  function buildCustomTimeInput(input) {
+    if (input.closest('.custom-control')) return;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'custom-control custom-time-control';
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'custom-control-trigger custom-time-trigger';
+    const value = document.createElement('span');
+    value.className = 'custom-control-value';
+    trigger.appendChild(value);
+    const panel = document.createElement('div');
+    panel.className = 'custom-control-panel custom-time-panel';
+    panel.hidden = true;
+    input.classList.add('native-control');
+    input.parentNode.insertBefore(wrapper, input);
+    wrapper.append(input, trigger, panel);
+    const renderTimePanel = () => {
+      const selected = parseTimeValue(input.value) || { hours: 0, minutes: 0 };
+      panel.replaceChildren();
+      const columns = document.createElement('div');
+      columns.className = 'custom-time-columns';
+      const column = (count, current, onPick) => {
+        const list = document.createElement('div');
+        list.className = 'custom-time-col';
+        for (let index = 0; index < count; index += 1) {
+          const option = document.createElement('button');
+          option.type = 'button';
+          option.className = 'custom-time-option' + (index === current ? ' selected' : '');
+          option.textContent = padDatePart(index);
+          option.addEventListener('click', event => {
+            event.stopPropagation();
+            onPick(index);
+          });
+          list.appendChild(option);
+        }
+        requestAnimationFrame(() => {
+          const active = list.querySelector('.selected');
+          if (active) list.scrollTop = Math.max(0, active.offsetTop - list.clientHeight / 2 + active.clientHeight / 2);
+        });
+        return list;
+      };
+      const apply = (hours, minutes) => {
+        input.value = formatTimeValue(hours, minutes);
+        dispatchControlChange(input);
+        refreshCustomControl(input);
+        renderTimePanel();
+      };
+      columns.append(
+        column(24, selected.hours, hours => apply(hours, selected.minutes)),
+        column(60, selected.minutes, minutes => apply(selected.hours, minutes))
+      );
+      panel.appendChild(columns);
+    };
+    trigger.addEventListener('click', () => {
+      if (input.disabled) return;
+      const opening = !wrapper.classList.contains('open');
+      closeCustomControls(wrapper);
+      wrapper.classList.toggle('open', opening);
+      panel.hidden = !opening;
+      if (opening) renderTimePanel();
+    });
+    input.addEventListener('change', () => refreshCustomControl(input));
+    refreshCustomControl(input);
+  }
   function initCustomControls(root) {
     (root || document).querySelectorAll('select:not(.native-control)').forEach(buildCustomSelect);
+    (root || document).querySelectorAll('input[type="time"]:not(.native-control)').forEach(buildCustomTimeInput);
     (root || document).querySelectorAll('input[type="datetime-local"]:not(.native-control)').forEach(buildCustomDateInput);
   }
 
@@ -4889,13 +4967,14 @@
     const input = Number(authQuotaValue(warmup, 'input_tokens') || 0);
     const output = Number(authQuotaValue(warmup, 'output_tokens') || 0);
     const observed = status === 'succeeded' && !!authQuotaValue(warmup, 'window_observed');
-    const usage = status === 'succeeded' ? ' · '+input.toLocaleString()+' in / '+output.toLocaleString()+' out' : '';
     const errorText = errorLabels[error] || error;
-    const detail = [labels[status] || status, model, status === 'succeeded' ? (input+' input / '+output+' output tokens') : '', errorText].filter(Boolean).join(' · ');
+    const usageText = status === 'succeeded' ? (input+' 输入 / '+output+' 输出') : '';
+    const detail = [labels[status] || status, model, usageText, errorText].filter(Boolean).join(' · ');
+    const time = completed ? '<time>'+esc(authQuotaShortTime(completed))+'</time>' : '';
     if (status === 'failed') {
-      return '<p class="auth-quota-warmup-status is-failed" title="'+esc(detail)+'"><span>预热失败</span><em class="auth-quota-warmup-error">'+esc(errorText || '上游执行失败')+'</em>'+(completed ? '<b>'+esc(authQuotaShortTime(completed))+'</b>' : '')+'</p>';
+      return '<p class="auth-quota-warmup-status is-failed" title="'+esc(detail)+'"><span class="auth-quota-warmup-main"><span>预热失败</span><em class="auth-quota-warmup-error">'+esc(errorText || '上游执行失败')+'</em></span>'+time+'</p>';
     }
-    return '<p class="auth-quota-warmup-status is-'+esc(status)+'" title="'+esc(detail)+'"><span>预热统计</span> '+esc(labels[status] || status)+(observed ? ' <i class="auth-quota-warmup-observed">窗口已更新</i>' : '')+(model ? ' <b>'+esc(model)+'</b>' : '')+(completed ? ' '+esc(authQuotaShortTime(completed)) : '')+(status === 'succeeded' ? '<em>'+esc(usage)+'</em>' : '')+'</p>';
+    return '<p class="auth-quota-warmup-status is-'+esc(status)+'" title="'+esc(detail)+'"><span class="auth-quota-warmup-main"><span>'+esc(labels[status] || status)+'</span>'+(observed ? '<i class="auth-quota-warmup-observed">窗口已更新</i>' : '')+'</span>'+time+'</p>';
   }
 
   async function loadAuthQuotas() {
@@ -5132,17 +5211,102 @@
       return '<option value="'+esc(key)+'"'+(selectedSet.has(key) ? ' selected' : '')+'>'+esc(label+(provider ? ' · '+provider : ''))+'</option>';
     }).join('');
   }
+  function authWarmupFrequencyOptions(selected) {
+    return [['daily','每天'],['weekly','每周'],['once','单次']].map(([value, label]) => '<option value="'+value+'"'+(value === selected ? ' selected' : '')+'>'+label+'</option>').join('');
+  }
+  function authWarmupWeekdayOptions(selected) {
+    const selectedSet = new Set((selected || []).map(String));
+    return [['1','周一'],['2','周二'],['3','周三'],['4','周四'],['5','周五'],['6','周六'],['0','周日']].map(([value, label]) => '<option value="'+value+'"'+(selectedSet.has(value) ? ' selected' : '')+'>'+label+'</option>').join('');
+  }
+  function authWarmupTimezoneOptions(selected) {
+    const preferred = [
+      ['Asia/Shanghai', '上海 · Asia/Shanghai'],
+      ['Asia/Hong_Kong', '香港 · Asia/Hong_Kong'],
+      ['Asia/Taipei', '台北 · Asia/Taipei'],
+      ['Asia/Singapore', '新加坡 · Asia/Singapore'],
+      ['Asia/Tokyo', '东京 · Asia/Tokyo'],
+      ['Asia/Seoul', '首尔 · Asia/Seoul'],
+      ['UTC', 'UTC'],
+      ['Europe/London', '伦敦 · Europe/London'],
+      ['Europe/Paris', '巴黎 · Europe/Paris'],
+      ['Europe/Berlin', '柏林 · Europe/Berlin'],
+      ['America/New_York', '纽约 · America/New_York'],
+      ['America/Chicago', '芝加哥 · America/Chicago'],
+      ['America/Los_Angeles', '洛杉矶 · America/Los_Angeles'],
+      ['America/Sao_Paulo', '圣保罗 · America/Sao_Paulo'],
+      ['Australia/Sydney', '悉尼 · Australia/Sydney']
+    ];
+    const selectedZone = String(selected || 'Asia/Shanghai').trim() || 'Asia/Shanghai';
+    const labels = new Map(preferred);
+    const zones = preferred.map(([value]) => value);
+    try {
+      (Intl.supportedValuesOf('timeZone') || []).forEach(zone => {
+        if (!zones.includes(zone)) zones.push(zone);
+      });
+    } catch (_) {}
+    if (!zones.includes(selectedZone)) zones.unshift(selectedZone);
+    return zones.map(zone => '<option value="'+esc(zone)+'"'+(zone === selectedZone ? ' selected' : '')+'>'+esc(labels.get(zone) || zone)+'</option>').join('');
+  }
+  function authWarmupWeekdayValues(schedule) {
+    const raw = authQuotaValue(schedule, 'weekdays');
+    const days = Array.isArray(raw) ? raw.map(Number).filter(value => Number.isInteger(value) && value >= 0 && value <= 6) : [];
+    return [...new Set(days)];
+  }
+  function authWarmupToday() {
+    const now = new Date();
+    return now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+  }
+  function authWarmupDateTimeValue(schedule) {
+    const date = String(authQuotaValue(schedule, 'warmup_on') || '').trim();
+    const time = String(authQuotaValue(schedule, 'warmup_at') || '03:50').trim() || '03:50';
+    return (/^\d{4}-\d{2}-\d{2}$/.test(date) ? date : authWarmupToday())+'T'+time;
+  }
+  function syncAuthWarmupFrequency(card) {
+    const frequency = String(card.querySelector('.auth-warmup-task-frequency').value || 'daily');
+    const weekly = frequency === 'weekly';
+    const once = frequency === 'once';
+    card.classList.toggle('is-weekly', weekly);
+    card.classList.toggle('is-once', once);
+    const weekday = card.querySelector('.auth-warmup-task-weekday');
+    const datetime = card.querySelector('.auth-warmup-task-datetime');
+    const clock = card.querySelector('.auth-warmup-task-clock');
+    if (weekday) weekday.hidden = !weekly;
+    if (datetime) datetime.hidden = !once;
+    if (clock) clock.hidden = once;
+    if (weekly) {
+      const select = card.querySelector('.auth-warmup-task-weekdays');
+      if (select && !select.selectedOptions.length) {
+        const monday = [...select.options].find(option => option.value === '1');
+        if (monday) monday.selected = true;
+        refreshCustomControl(select);
+      }
+    }
+    if (once) {
+      const input = card.querySelector('.auth-warmup-task-warmup-datetime');
+      const time = String(card.querySelector('.auth-warmup-task-warmup-at').value || '03:50');
+      if (input) {
+        const date = String(input.value || '').split('T')[0] || authWarmupToday();
+        input.value = date+'T'+time;
+        refreshCustomControl(input);
+      }
+    }
+  }
   function authWarmupTaskSummary(card) {
     const authCount = card.querySelector('.auth-warmup-task-auths').selectedOptions.length;
     const modelCount = card.querySelector('.auth-warmup-task-models').selectedOptions.length;
+    const frequency = String(card.querySelector('.auth-warmup-task-frequency').value || 'daily');
+    const selectedDays = [...card.querySelector('.auth-warmup-task-weekdays').selectedOptions].map(option => option.value);
+    const dayNames = {1:'一',2:'二',3:'三',4:'四',5:'五',6:'六',0:'日'};
+    const weeklyLabel = ['1','2','3','4','5','6','0'].filter(day => selectedDays.includes(day)).map(day => dayNames[day]).join('、');
+    const when = frequency === 'weekly' ? (weeklyLabel ? '每周'+weeklyLabel : '每周') : (frequency === 'once' ? '单次' : '每天');
     const summary = card.querySelector('.auth-warmup-task-summary');
-    if (summary) summary.textContent = (authCount ? authCount+' 个认证' : '未选认证')+' · '+(modelCount ? modelCount+' 个模型' : '未选模型');
+    if (summary) summary.textContent = when+' · '+(authCount ? authCount+' 个认证' : '未选认证')+' · '+(modelCount ? modelCount+' 个模型' : '未选模型');
   }
   function renderAuthWarmupSchedules(schedules) {
     const list = $('authWarmupScheduleList');
     if (!list) return;
     if (!schedules.length) {
-      list.innerHTML = '<div class="auth-warmup-empty"><strong>还没有定时预热任务</strong><span>添加任务后，分别选择认证文件、模型和目标时间。</span></div>';
+      list.innerHTML = '<div class="auth-warmup-empty"><strong>还没有定时预热任务</strong><span>添加任务后，分别选择每天、每周或单次、认证文件、模型和目标时间。</span></div>';
       return;
     }
     list.innerHTML = schedules.map((schedule, index) => {
@@ -5150,19 +5314,22 @@
       const name = authQuotaValue(schedule, 'name') || ('预热任务 '+(index + 1));
       const auths = Array.isArray(authQuotaValue(schedule, 'auths')) ? authQuotaValue(schedule, 'auths') : [];
       const models = Array.isArray(authQuotaValue(schedule, 'models')) ? authQuotaValue(schedule, 'models') : [];
-      return '<article class="auth-warmup-task" data-schedule-id="'+esc(id)+'"><header class="auth-warmup-task-head"><div class="auth-warmup-task-title"><span class="auth-warmup-task-index">'+String(index + 1).padStart(2, '0')+'</span><input class="auth-warmup-task-name" value="'+esc(name)+'" aria-label="任务名称"/></div><div class="auth-warmup-task-actions"><label class="auth-warmup-task-toggle" title="启用此任务"><input class="auth-warmup-task-enabled" type="checkbox" role="switch"'+(authQuotaValue(schedule, 'enabled') ? ' checked' : '')+'/><i aria-hidden="true"></i></label><button type="button" class="icon-btn auth-warmup-task-delete" title="删除任务" aria-label="删除 '+esc(name)+'"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.2 4.55h9.6M6.05 2.7h3.9v1.85H6.05z"/><path d="M5.05 4.55l.52 7.7c.05.66.58 1.15 1.24 1.15h2.38c.66 0 1.19-.49 1.24-1.15l.52-7.7"/><path d="M6.8 6.9v4.15M9.2 6.9v4.15"/></svg></button></div></header><div class="auth-warmup-task-grid"><label><span>时区</span><input class="auth-warmup-task-timezone" value="'+esc(authQuotaValue(schedule, 'timezone') || 'Asia/Shanghai')+'"/></label><label><span>预热时间</span><input class="auth-warmup-task-warmup-at" type="time" value="'+esc(authQuotaValue(schedule, 'warmup_at') || '03:50')+'"/></label></div><div class="auth-warmup-task-pickers"><label><span>认证文件</span><select class="auth-warmup-task-auths" multiple data-empty-text="选择认证文件" aria-label="认证文件">'+authWarmupAuthSelectOptions(auths)+'</select></label><label><span>预热模型</span><select class="auth-warmup-task-models" multiple data-empty-text="选择预热模型" aria-label="预热模型">'+authWarmupSelectOptions(authWarmupModelOptions(models), models)+'</select></label></div><footer><span class="auth-warmup-task-summary"></span><span>每个认证仅预热一个支持的已选模型</span></footer></article>';
+      const frequency = authQuotaValue(schedule, 'frequency') === 'weekly' ? 'weekly' : (authQuotaValue(schedule, 'frequency') === 'once' ? 'once' : 'daily');
+      const weekday = authWarmupWeekdayValues(schedule);
+      return '<article class="auth-warmup-task" data-schedule-id="'+esc(id)+'"><header class="auth-warmup-task-head"><div class="auth-warmup-task-title"><span class="auth-warmup-task-index">'+String(index + 1).padStart(2, '0')+'</span><input class="auth-warmup-task-name" value="'+esc(name)+'" aria-label="任务名称"/></div><div class="auth-warmup-task-actions"><label class="auth-warmup-task-toggle" title="启用此任务"><input class="auth-warmup-task-enabled" type="checkbox" role="switch"'+(authQuotaValue(schedule, 'enabled') ? ' checked' : '')+'/><i aria-hidden="true"></i></label><button type="button" class="icon-btn auth-warmup-task-delete" title="删除任务" aria-label="删除 '+esc(name)+'"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.2 4.55h9.6M6.05 2.7h3.9v1.85H6.05z"/><path d="M5.05 4.55l.52 7.7c.05.66.58 1.15 1.24 1.15h2.38c.66 0 1.19-.49 1.24-1.15l.52-7.7"/><path d="M6.8 6.9v4.15M9.2 6.9v4.15"/></svg></button></div></header><div class="auth-warmup-task-grid"><label><span>频率</span><select class="auth-warmup-task-frequency" aria-label="频率">'+authWarmupFrequencyOptions(frequency)+'</select></label><label class="auth-warmup-task-weekday"><span>星期</span><select class="auth-warmup-task-weekdays" multiple data-empty-text="选择星期" aria-label="星期">'+authWarmupWeekdayOptions(weekday)+'</select></label><label><span>时区</span><select class="auth-warmup-task-timezone" aria-label="时区">'+authWarmupTimezoneOptions(authQuotaValue(schedule, 'timezone') || 'Asia/Shanghai')+'</select></label><label class="auth-warmup-task-datetime"><span>预热时间</span><input class="auth-warmup-task-warmup-datetime" type="datetime-local" value="'+esc(authWarmupDateTimeValue(schedule))+'"/></label><label class="auth-warmup-task-clock"><span>预热时间</span><input class="auth-warmup-task-warmup-at" type="time" value="'+esc(authQuotaValue(schedule, 'warmup_at') || '03:50')+'"/></label></div><div class="auth-warmup-task-pickers"><label><span>认证文件</span><select class="auth-warmup-task-auths" multiple data-empty-text="选择认证文件" aria-label="认证文件">'+authWarmupAuthSelectOptions(auths)+'</select></label><label><span>预热模型</span><select class="auth-warmup-task-models" multiple data-empty-text="选择预热模型" aria-label="预热模型">'+authWarmupSelectOptions(authWarmupModelOptions(models), models)+'</select></label></div><footer><span class="auth-warmup-task-summary"></span><span>每个认证仅预热一个支持的已选模型</span></footer></article>';
     }).join('');
     initCustomControls(list);
     list.querySelectorAll('.auth-warmup-task').forEach(card => {
       card.classList.toggle('is-disabled', !card.querySelector('.auth-warmup-task-enabled').checked);
+      syncAuthWarmupFrequency(card);
       authWarmupTaskSummary(card);
     });
   }
   function newAuthWarmupSchedule() {
-    return { id: authWarmupID(), name: '预热任务', enabled: true, timezone: 'Asia/Shanghai', warmup_at: '03:50', auths: [], models: [] };
+    return { id: authWarmupID(), name: '预热任务', enabled: true, frequency: 'daily', weekdays: [1], timezone: 'Asia/Shanghai', warmup_at: '03:50', warmup_on: authWarmupToday(), auths: [], models: [] };
   }
   function applyAuthWarmupSettings(settings) {
-    setAuthWarmupField('authWarmupMaxParallel', authQuotaValue(settings, 'max_parallel') || 1);
+    setAuthWarmupField('authWarmupMaxParallel', authQuotaValue(settings, 'max_parallel') || 10);
     setAuthWarmupField('authWarmupJitter', authQuotaValue(settings, 'stable_jitter_seconds') || 0);
     renderAuthWarmupSchedules(authWarmupSchedules(settings));
   }
@@ -5204,13 +5371,26 @@
     const value = Number($(id).value);
     return Number.isInteger(value) ? value : NaN;
   }
+  function collectAuthWarmupClock(card) {
+    const frequency = String(card.querySelector('.auth-warmup-task-frequency').value || 'daily').trim();
+    const clock = String(card.querySelector('.auth-warmup-task-warmup-at').value || '').trim();
+    const raw = String(card.querySelector('.auth-warmup-task-warmup-datetime').value || '').trim();
+    const parts = raw.split('T');
+    if (frequency === 'once') {
+      return { warmupAt: (parts[1] || clock).slice(0, 5), warmupOn: parts[0] || '' };
+    }
+    return { warmupAt: clock, warmupOn: parts[0] || '' };
+  }
   function collectAuthWarmupSettings() {
     const schedules = [...$('authWarmupScheduleList').querySelectorAll('.auth-warmup-task')].map(card => ({
       id: card.getAttribute('data-schedule-id') || authWarmupID(),
       name: String(card.querySelector('.auth-warmup-task-name').value || '').trim(),
       enabled: card.querySelector('.auth-warmup-task-enabled').checked,
+      frequency: String(card.querySelector('.auth-warmup-task-frequency').value || 'daily').trim(),
+      weekdays: [...card.querySelector('.auth-warmup-task-weekdays').selectedOptions].map(option => Number(option.value)).filter(value => Number.isInteger(value) && value >= 0 && value <= 6),
       timezone: String(card.querySelector('.auth-warmup-task-timezone').value || '').trim(),
-      warmup_at: String(card.querySelector('.auth-warmup-task-warmup-at').value || '').trim(),
+      warmup_at: collectAuthWarmupClock(card).warmupAt,
+      warmup_on: collectAuthWarmupClock(card).warmupOn,
       auths: [...card.querySelector('.auth-warmup-task-auths').selectedOptions].map(option => parseAuthWarmupAuthKey(option.value)).filter(Boolean),
       models: [...card.querySelector('.auth-warmup-task-models').selectedOptions].map(option => option.value).filter(Boolean)
     }));
@@ -5595,6 +5775,9 @@
     if (card) {
       if (event.target.classList.contains('auth-warmup-task-enabled')) {
         card.classList.toggle('is-disabled', !event.target.checked);
+      }
+      if (event.target.closest('.auth-warmup-task-frequency')) {
+        syncAuthWarmupFrequency(card);
       }
       authWarmupTaskSummary(card);
     }

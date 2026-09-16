@@ -152,7 +152,6 @@ func (s *Service) runScheduledAuthWarmups(ctx context.Context, now time.Time) {
 	if parallel < 1 {
 		parallel = 1
 	}
-	sem := s.authWarmupSemaphore(parallel)
 	for _, schedule := range settings.Schedules {
 		if !schedule.Enabled {
 			continue
@@ -163,6 +162,7 @@ func (s *Service) runScheduledAuthWarmups(ctx context.Context, now time.Time) {
 				continue
 			}
 			file, schedule := file, schedule
+			sem := s.authWarmupSemaphore(warmupAuthSlotKey(file), parallel)
 			select {
 			case sem <- struct{}{}:
 			default:
@@ -172,24 +172,49 @@ func (s *Service) runScheduledAuthWarmups(ctx context.Context, now time.Time) {
 			}
 			go func() {
 				defer func() { <-sem }()
-				// The task/date key is durable idempotency for each selected auth.
-				_, _ = s.warmupAuthQuota(ctx, "", file.Provider, first(file.ID, file.Name, file.AuthIndex), file.AuthIndex, scheduledWarmupKey(schedule, now), true, settings, schedule)
+				// One claim per task/auth/clock so catch-up ticks do not repeat the same due time.
+				_, _ = s.warmupAuthQuota(ctx, "", file.Provider, first(file.ID, file.Name, file.AuthIndex), file.AuthIndex, scheduledWarmupKey(schedule, now), schedule)
 			}()
 		}
 	}
 }
 
-func (s *Service) authWarmupSemaphore(limit int) chan struct{} {
+func warmupAuthSlotKey(file AuthQuotaFile) string {
+	return quotaProvider(file.Provider) + "\x00" + first(file.ID, file.Name, file.AuthIndex)
+}
+
+func (s *Service) authWarmupSemaphore(slot string, limit int) chan struct{} {
 	if limit < 1 {
 		limit = 1
 	}
+	slot = strings.TrimSpace(slot)
+	if slot == "" {
+		slot = "_"
+	}
 	s.warmupMu.Lock()
 	defer s.warmupMu.Unlock()
-	if s.warmupSem == nil || (s.warmupSemLimit != limit && len(s.warmupSem) == 0) {
-		s.warmupSem = make(chan struct{}, limit)
+	if s.warmupSems == nil {
+		s.warmupSems = make(map[string]chan struct{})
+		s.warmupSemLimit = limit
+	} else if s.warmupSemLimit != limit && !authWarmupSemaphoresBusy(s.warmupSems) {
+		s.warmupSems = make(map[string]chan struct{})
 		s.warmupSemLimit = limit
 	}
-	return s.warmupSem
+	sem := s.warmupSems[slot]
+	if sem == nil {
+		sem = make(chan struct{}, limit)
+		s.warmupSems[slot] = sem
+	}
+	return sem
+}
+
+func authWarmupSemaphoresBusy(sems map[string]chan struct{}) bool {
+	for _, sem := range sems {
+		if len(sem) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // WarmupAuthQuota runs one explicit operator-triggered quota-window warmup.
@@ -201,17 +226,13 @@ func (s *Service) WarmupAuthQuota(ctx context.Context, provider, authID, authInd
 	if len(models) == 0 {
 		return AuthQuotaOverviewItem{}, errors.New("manual warmup requires at least one model supported by this auth file")
 	}
-	settings, err := s.store.GetAuthWarmupSettings(ctx)
-	if err != nil {
-		return AuthQuotaOverviewItem{}, err
-	}
 	schedule := store.AuthWarmupSchedule{ID: "manual", Name: "立即预热", Auths: []store.AuthWarmupAuthTarget{{Provider: provider, AuthID: authID, AuthIndex: authIndex}}, Models: models}
 	// A manual button press is explicit operator intent. Unlike scheduled work,
 	// it must not be suppressed by the day's prior manual warmup record.
-	return s.warmupAuthQuota(ctx, "", provider, authID, authIndex, "manual:"+newAuthWarmupID(), false, settings, schedule)
+	return s.warmupAuthQuota(ctx, "", provider, authID, authIndex, "manual:"+newAuthWarmupID(), schedule)
 }
 
-func (s *Service) warmupAuthQuota(ctx context.Context, callback, provider, authID, authIndex, scheduleKey string, skipActiveWindow bool, settings store.AuthWarmupSettings, schedule store.AuthWarmupSchedule) (AuthQuotaOverviewItem, error) {
+func (s *Service) warmupAuthQuota(ctx context.Context, callback, provider, authID, authIndex, scheduleKey string, schedule store.AuthWarmupSchedule) (AuthQuotaOverviewItem, error) {
 	if s == nil {
 		return AuthQuotaOverviewItem{}, errors.New("auth quota warmup unavailable")
 	}
@@ -225,9 +246,6 @@ func (s *Service) warmupAuthQuota(ctx context.Context, callback, provider, authI
 	}
 	if item.Status != "fresh" {
 		return item, errors.New("auth quota warmup requires a fresh quota snapshot")
-	}
-	if skipActiveWindow && authQuotaHasActiveShortWindow(item, time.Now()) {
-		return s.attachAuthWarmupRun(warmupStoreContext(ctx), item), nil
 	}
 	identity := store.AuthIdentity{AuthID: item.AuthID, AuthIndex: item.AuthIndex, Provider: item.Provider, Name: item.DisplayName}
 	models := shuffleAuthWarmupModels(schedule.Models)
@@ -253,8 +271,10 @@ func (s *Service) warmupAuthQuota(ctx context.Context, callback, provider, authI
 		return item, err
 	}
 	if !claimed {
+		s.disableOnceAuthWarmupSchedule(storeCtx, schedule)
 		return s.attachAuthWarmupRun(storeCtx, item), nil
 	}
+	defer s.disableOnceAuthWarmupSchedule(storeCtx, schedule)
 
 	result, execErr := executor.ExecuteAuthWarmup(ctx, AuthWarmupRequest{
 		RunID:         run.ID,
@@ -288,6 +308,32 @@ func warmupStoreContext(ctx context.Context) context.Context {
 }
 
 var ErrAuthWarmupModelUnavailable = errors.New("warmup target does not support a selected model")
+
+func (s *Service) disableOnceAuthWarmupSchedule(ctx context.Context, schedule store.AuthWarmupSchedule) {
+	if s == nil || s.store == nil || store.AuthWarmupFrequency(schedule.Frequency) != store.AuthWarmupFrequencyOnce {
+		return
+	}
+	scheduleID := strings.TrimSpace(schedule.ID)
+	if scheduleID == "" || scheduleID == "manual" {
+		return
+	}
+	settings, err := s.store.GetAuthWarmupSettings(ctx)
+	if err != nil {
+		return
+	}
+	changed := false
+	for i := range settings.Schedules {
+		if settings.Schedules[i].ID != scheduleID || !settings.Schedules[i].Enabled {
+			continue
+		}
+		settings.Schedules[i].Enabled = false
+		changed = true
+	}
+	if !changed {
+		return
+	}
+	_, _ = s.store.UpsertAuthWarmupSettings(ctx, settings)
+}
 
 func uniqueAuthWarmupModels(models []string) []string {
 	unique := make(map[string]struct{}, len(models))
@@ -328,16 +374,37 @@ func authWarmupIsDue(settings store.AuthWarmupSettings, schedule store.AuthWarmu
 		return false
 	}
 	localNow := now.In(location)
+	freq := store.AuthWarmupFrequency(schedule.Frequency)
+	if freq == store.AuthWarmupFrequencyWeekly && !store.AuthWarmupMatchesWeekday(schedule, localNow.Weekday()) {
+		return false
+	}
+	if freq == store.AuthWarmupFrequencyOnce {
+		on, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(schedule.WarmupOn), location)
+		if err != nil || localNow.Year() != on.Year() || localNow.YearDay() != on.YearDay() {
+			return false
+		}
+	}
 	due := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), warmupHour, warmupMinute, 0, 0, location).Add(authWarmupJitter(time.Duration(settings.StableJitterSeconds)*time.Second, file))
 	return !localNow.Before(due) && localNow.Before(due.Add(15*time.Minute))
 }
 
 func scheduledWarmupKey(schedule store.AuthWarmupSchedule, now time.Time) string {
-	location, err := time.LoadLocation(schedule.Timezone)
-	if err != nil {
-		return "scheduled:" + schedule.ID + ":" + now.UTC().Format("2006-01-02")
+	warmupAt := strings.TrimSpace(schedule.WarmupAt)
+	if parsed, err := time.Parse("15:04", warmupAt); err == nil {
+		warmupAt = parsed.Format("15:04")
 	}
-	return "scheduled:" + schedule.ID + ":" + now.In(location).Format("2006-01-02")
+	location, err := time.LoadLocation(strings.TrimSpace(schedule.Timezone))
+	freq := store.AuthWarmupFrequency(schedule.Frequency)
+	day := now.UTC().Format("2006-01-02")
+	if err == nil {
+		day = now.In(location).Format("2006-01-02")
+	}
+	if freq == store.AuthWarmupFrequencyOnce {
+		if on := strings.TrimSpace(schedule.WarmupOn); on != "" {
+			day = on
+		}
+	}
+	return "scheduled:" + schedule.ID + ":" + freq + ":" + day + ":" + warmupAt
 }
 
 func findWarmupAuthFile(files []AuthQuotaFile, target store.AuthWarmupAuthTarget) (AuthQuotaFile, bool) {
@@ -370,19 +437,6 @@ func authWarmupJitter(max time.Duration, file AuthQuotaFile) time.Duration {
 		sum = sum*131 + uint64(value)
 	}
 	return time.Duration(sum%uint64(max/time.Second+1)) * time.Second
-}
-
-func authQuotaHasActiveShortWindow(item AuthQuotaOverviewItem, now time.Time) bool {
-	for _, window := range item.Windows {
-		if window.ResetsAt == nil || !window.ResetsAt.After(now) || window.DurationSeconds == nil {
-			continue
-		}
-		duration := time.Duration(*window.DurationSeconds) * time.Second
-		if duration > 0 && duration <= 8*time.Hour {
-			return true
-		}
-	}
-	return false
 }
 
 // authQuotaWindowsChanged confirms that the post-warmup upstream snapshot

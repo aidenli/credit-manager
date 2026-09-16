@@ -160,6 +160,9 @@ func TestLookupCustomDatePickerMatchesConsole(t *testing.T) {
 		"custom-date-trigger",
 		"选择日期和时间",
 		"input[type=\"datetime-local\"]:not(.native-control)",
+		"input[type=\"time\"]:not(.native-control)",
+		"buildCustomTimeInput",
+		"custom-time-panel",
 	} {
 		if !strings.Contains(lookup, text) {
 			t.Fatalf("lookup page is missing management date picker: %q", text)
@@ -555,6 +558,29 @@ func TestConsoleAuthQuotaWarmupClearsBusyStateBeforeReload(t *testing.T) {
 	}
 }
 
+func TestConsoleAuthQuotaWarmupStatusOmitsCrowdedNoise(t *testing.T) {
+	page := string(consolePage().Body)
+	start := strings.Index(page, "function authQuotaWarmupStatus")
+	if start < 0 {
+		t.Fatal("warmup status renderer is missing")
+	}
+	end := strings.Index(page[start:], "async function loadAuthQuotas")
+	if end < 0 {
+		t.Fatal("warmup status renderer boundary is missing")
+	}
+	body := page[start : start+end]
+	for _, noise := range []string{"预热统计", " in / ", "input / "} {
+		if strings.Contains(body, noise) {
+			t.Fatalf("warmup status still shows crowded noise %q", noise)
+		}
+	}
+	for _, keep := range []string{"auth-quota-warmup-main", "窗口已更新", "<time>"} {
+		if !strings.Contains(body, keep) {
+			t.Fatalf("warmup status is missing %q", keep)
+		}
+	}
+}
+
 func TestConsoleAuthQuotaWarmupSettingsControls(t *testing.T) {
 	page := string(consolePage().Body)
 	for _, text := range []string{
@@ -562,6 +588,19 @@ func TestConsoleAuthQuotaWarmupSettingsControls(t *testing.T) {
 		"auth-warmup-task-actions",
 		"auth-warmup-task-toggle",
 		"auth-warmup-task-delete",
+		"auth-warmup-task-frequency",
+		"auth-warmup-task-weekdays",
+		`class="auth-warmup-task-weekdays" multiple`,
+		"authWarmupTimezoneOptions",
+		"auth-warmup-task-timezone",
+		".auth-warmup-task-grid .auth-warmup-task-weekday",
+		"auth-warmup-task-datetime",
+		"datetime-local",
+		"buildCustomTimeInput",
+		"custom-time-panel",
+		"每天",
+		"每周",
+		"单次",
 		`type="checkbox" role="switch"`,
 		".auth-warmup-task-actions { flex:0 0 auto; align-items:center; gap:2px; height:30px;",
 		".auth-warmup-task .icon-btn { display:grid; place-items:center; width:30px; height:30px;",
