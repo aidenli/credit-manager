@@ -428,7 +428,7 @@ func TestConsoleImagePricingUsesPerImageBilling(t *testing.T) {
 func TestConsoleAuthQuotaViewIsManagementOnly(t *testing.T) {
 	page := string(consolePage().Body)
 	for _, text := range []string{
-		"data-tab=\"auth-quotas\"", "credit-manager/auth-quotas", "credit-manager/auth-quotas/refresh", "credit-manager/auth-quotas/warmup", "credit-manager/auth-quotas/warmup/settings", "auth-quota-warmup", "authQuotaWarmupStatus", "btnAuthWarmupSettings", "authWarmupSettingsModal", "btnAddAuthWarmupSchedule", "authWarmupScheduleList", "auth-warmup-task", "renderAuthWarmupSchedules", "openAuthWarmupSettings", "saveAuthWarmupSettings", "短周期同样显示", "auth-quota-window-card", "auth-quota-bar", "function authQuotaPeriodBadge", "auth-quota-reload",
+		"data-tab=\"auth-quotas\"", "credit-manager/auth-quotas", "credit-manager/auth-quotas/refresh", "credit-manager/auth-quotas/warmup", "credit-manager/auth-quotas/warmup/settings", "auth-quota-warmup", "authQuotaWarmupStatus", "btnAuthWarmupSettings", "authWarmupSettingsModal", "btnAddAuthWarmupSchedule", "authWarmupScheduleList", "auth-warmup-task", "auth-warmup-settings-footer", "renderAuthWarmupSchedules", "openAuthWarmupSettings", "saveAuthWarmupSettings", "短周期同样显示", "auth-quota-window-card", "auth-quota-bar", "function authQuotaPeriodBadge", "auth-quota-reload",
 		"auth-quota-period-picker", "auth-quota-period-trigger", "auth-quota-period-menu", "auth-quota-period-option", "closeAuthQuotaPeriodMenus", "配额窗口", "authQuotaIsWeekly", "authQuotaIsCycleWindow", "function authQuotaPrimaryCycleWindows", "latestByBaseline", "authQuotaIsFiveHour", "authQuotaDisplayWindows", "const companions", "displayedCycles", "selectedPrimaryCycles", "authQuotaIsPartial(window)", "function authQuotaIsPartial", "return '不完整'", "authQuotaIsWeekly(window) || /quota|window/i.test(text)", "timeless", "function authQuotaWindowStartMs", "reset - duration * 1000", "authQuotaWindowCurrent", "6 * 60 * 60 * 1000", "includes('secondary')", "authQuotaCostForecast", "当前费用", "预估剩余", "预计可用", "authQuotaProviderFilter", "authQuotaNameFilter", "overflow-x:auto", "state.currentTab === 'auth-quotas'", "认证额度已从缓存刷新",
 		"btnRefreshAuthQuotaPage", "刷新本页", "authQuotaPagination", "authQuotaPageSize", "credit-manager/auth-quotas?", "page_size",
 		"authQuotaPlanName", "auth-quota-plan", "订阅类型",
@@ -552,6 +552,26 @@ func TestConsoleAuthQuotaWarmupClearsBusyStateBeforeReload(t *testing.T) {
 	reloadAt := strings.Index(warmup, "await loadAuthQuotas();")
 	if clearAt < 0 || reloadAt < 0 || clearAt > reloadAt {
 		t.Fatalf("warmup busy state is not cleared before reload: clear=%d reload=%d", clearAt, reloadAt)
+	}
+}
+
+func TestConsoleAuthQuotaWarmupSettingsControls(t *testing.T) {
+	page := string(consolePage().Body)
+	for _, text := range []string{
+		"auth-warmup-settings-footer",
+		"auth-warmup-task-actions",
+		"auth-warmup-task-toggle",
+		"auth-warmup-task-delete",
+		`type="checkbox" role="switch"`,
+		".auth-warmup-task-actions { flex:0 0 auto; align-items:center; gap:2px; height:30px;",
+		".auth-warmup-task .icon-btn { display:grid; place-items:center; width:30px; height:30px;",
+		".auth-warmup-task .icon-btn svg { width:16px; height:16px; }",
+		".auth-warmup-settings-footer .btn { min-height:38px;",
+		"stroke-width=\"1.85\"",
+	} {
+		if !strings.Contains(page, text) {
+			t.Fatalf("warmup settings controls are missing %q", text)
+		}
 	}
 }
 

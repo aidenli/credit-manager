@@ -5150,13 +5150,16 @@
       const name = authQuotaValue(schedule, 'name') || ('预热任务 '+(index + 1));
       const auths = Array.isArray(authQuotaValue(schedule, 'auths')) ? authQuotaValue(schedule, 'auths') : [];
       const models = Array.isArray(authQuotaValue(schedule, 'models')) ? authQuotaValue(schedule, 'models') : [];
-      return '<article class="auth-warmup-task" data-schedule-id="'+esc(id)+'"><header class="auth-warmup-task-head"><div class="auth-warmup-task-title"><span class="auth-warmup-task-index">'+String(index + 1).padStart(2, '0')+'</span><input class="auth-warmup-task-name" value="'+esc(name)+'" aria-label="任务名称"/></div><div class="auth-warmup-task-actions"><label class="auth-warmup-task-toggle" title="启用此任务"><input class="auth-warmup-task-enabled" type="checkbox"'+(authQuotaValue(schedule, 'enabled') ? ' checked' : '')+'/><i aria-hidden="true"></i></label><button type="button" class="icon-btn auth-warmup-task-delete" title="删除任务" aria-label="删除 '+esc(name)+'"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision" aria-hidden="true"><path d="M3.35 4.8h9.3M6.1 2.6h3.8l.72 1.6H5.38l.72-1.6ZM5.05 4.8l.5 7.35c.04.58.52 1.04 1.1 1.04h2.7c.58 0 1.06-.46 1.1-1.04l.5-7.35M6.9 7v3.95M9.1 7v3.95"/></svg></button></div></header><div class="auth-warmup-task-grid"><label><span>时区</span><input class="auth-warmup-task-timezone" value="'+esc(authQuotaValue(schedule, 'timezone') || 'Asia/Shanghai')+'"/></label><label><span>预热时间</span><input class="auth-warmup-task-warmup-at" type="time" value="'+esc(authQuotaValue(schedule, 'warmup_at') || '03:50')+'"/></label></div><div class="auth-warmup-task-pickers"><label><span>认证文件</span><select class="auth-warmup-task-auths" multiple data-empty-text="选择认证文件" aria-label="认证文件">'+authWarmupAuthSelectOptions(auths)+'</select></label><label><span>预热模型</span><select class="auth-warmup-task-models" multiple data-empty-text="选择预热模型" aria-label="预热模型">'+authWarmupSelectOptions(authWarmupModelOptions(models), models)+'</select></label></div><footer><span class="auth-warmup-task-summary"></span><span>每个认证仅预热一个支持的已选模型</span></footer></article>';
+      return '<article class="auth-warmup-task" data-schedule-id="'+esc(id)+'"><header class="auth-warmup-task-head"><div class="auth-warmup-task-title"><span class="auth-warmup-task-index">'+String(index + 1).padStart(2, '0')+'</span><input class="auth-warmup-task-name" value="'+esc(name)+'" aria-label="任务名称"/></div><div class="auth-warmup-task-actions"><label class="auth-warmup-task-toggle" title="启用此任务"><input class="auth-warmup-task-enabled" type="checkbox" role="switch"'+(authQuotaValue(schedule, 'enabled') ? ' checked' : '')+'/><i aria-hidden="true"></i></label><button type="button" class="icon-btn auth-warmup-task-delete" title="删除任务" aria-label="删除 '+esc(name)+'"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.2 4.55h9.6M6.05 2.7h3.9v1.85H6.05z"/><path d="M5.05 4.55l.52 7.7c.05.66.58 1.15 1.24 1.15h2.38c.66 0 1.19-.49 1.24-1.15l.52-7.7"/><path d="M6.8 6.9v4.15M9.2 6.9v4.15"/></svg></button></div></header><div class="auth-warmup-task-grid"><label><span>时区</span><input class="auth-warmup-task-timezone" value="'+esc(authQuotaValue(schedule, 'timezone') || 'Asia/Shanghai')+'"/></label><label><span>预热时间</span><input class="auth-warmup-task-warmup-at" type="time" value="'+esc(authQuotaValue(schedule, 'warmup_at') || '03:50')+'"/></label></div><div class="auth-warmup-task-pickers"><label><span>认证文件</span><select class="auth-warmup-task-auths" multiple data-empty-text="选择认证文件" aria-label="认证文件">'+authWarmupAuthSelectOptions(auths)+'</select></label><label><span>预热模型</span><select class="auth-warmup-task-models" multiple data-empty-text="选择预热模型" aria-label="预热模型">'+authWarmupSelectOptions(authWarmupModelOptions(models), models)+'</select></label></div><footer><span class="auth-warmup-task-summary"></span><span>每个认证仅预热一个支持的已选模型</span></footer></article>';
     }).join('');
     initCustomControls(list);
-    list.querySelectorAll('.auth-warmup-task').forEach(authWarmupTaskSummary);
+    list.querySelectorAll('.auth-warmup-task').forEach(card => {
+      card.classList.toggle('is-disabled', !card.querySelector('.auth-warmup-task-enabled').checked);
+      authWarmupTaskSummary(card);
+    });
   }
   function newAuthWarmupSchedule() {
-    return { id: authWarmupID(), name: '预热任务', enabled: false, timezone: 'Asia/Shanghai', warmup_at: '03:50', auths: [], models: [] };
+    return { id: authWarmupID(), name: '预热任务', enabled: true, timezone: 'Asia/Shanghai', warmup_at: '03:50', auths: [], models: [] };
   }
   function applyAuthWarmupSettings(settings) {
     setAuthWarmupField('authWarmupMaxParallel', authQuotaValue(settings, 'max_parallel') || 1);
@@ -5589,7 +5592,12 @@
   });
   $('authWarmupScheduleList').addEventListener('change', event => {
     const card = event.target.closest('.auth-warmup-task');
-    if (card) authWarmupTaskSummary(card);
+    if (card) {
+      if (event.target.classList.contains('auth-warmup-task-enabled')) {
+        card.classList.toggle('is-disabled', !event.target.checked);
+      }
+      authWarmupTaskSummary(card);
+    }
   });
   $('btnAuthQuotaBatchPage').addEventListener('click', () => {
     saveAuthQuotaConcurrencyBatch('page').catch(e => flash(e.message, false));
