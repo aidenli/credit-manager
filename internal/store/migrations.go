@@ -399,6 +399,26 @@ var migrations = []migration{
 			)`,
 		},
 	},
+	{
+		version: 26,
+		name:    "plugin key auth bindings",
+		up: []string{
+			// Many-to-many between plugin keys and host OAuth accounts. Accounts
+			// are identified by (provider, auth_id) because they live in the
+			// host's dynamic auth files, not in a table this plugin owns.
+			`CREATE TABLE IF NOT EXISTS key_auth_bindings (
+				plugin_key_id TEXT NOT NULL,
+				provider TEXT NOT NULL,
+				auth_id TEXT NOT NULL,
+				priority INTEGER NOT NULL DEFAULT 0,
+				created_at_unix_ms INTEGER NOT NULL,
+				PRIMARY KEY (plugin_key_id, provider, auth_id),
+				FOREIGN KEY (plugin_key_id) REFERENCES plugin_keys(id)
+			)`,
+			`CREATE INDEX IF NOT EXISTS key_auth_bindings_auth_idx
+				ON key_auth_bindings(provider, auth_id)`,
+		},
+	},
 }
 
 // Migrate applies every pending migration transactionally.

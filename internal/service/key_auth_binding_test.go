@@ -1,0 +1,172 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"sync"
+	"testing"
+
+	"github.com/yuluo688/credit-manager/internal/store"
+)
+
+// boundKey mints a real plugin key so its plaintext can travel in the same
+// Authorization header the host forwards to the scheduler.
+func boundKey(t *testing.T, s *Service, label string) (store.PluginKey, http.Header) {
+	t.Helper()
+	key, material, err := s.MintKeyWithPolicy(context.Background(), MintKeyRequest{Label: label})
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers := http.Header{}
+	headers.Set("Authorization", "Bearer "+material.Plaintext)
+	return key, headers
+}
+
+func TestPickAuthForKeyRestrictsToBoundAccounts(t *testing.T) {
+	s := quotaService(t)
+	ctx := context.Background()
+	key, headers := boundKey(t, s, "bound")
+	// "openai" must normalise onto the host's "codex" provider.
+	if err := s.Store().ReplaceKeyAuthBindings(ctx, key.ID, []store.KeyAuthBinding{{Provider: "openai", AuthID: "account-2"}}); err != nil {
+		t.Fatal(err)
+	}
+	candidates := []AuthPickCandidate{
+		{ID: "account-1", Provider: "codex"},
+		{ID: "account-2", Provider: "codex"},
+		{ID: "account-3", Provider: "codex"},
+	}
+	for i := 0; i < 3; i++ {
+		id, handled, err := s.PickAuthForKey(ctx, headers, candidates)
+		if err != nil || !handled || id != "account-2" {
+			t.Fatalf("bound pick %d = (%q, %t, %v)", i, id, handled, err)
+		}
+	}
+}
+
+func TestPickAuthForKeyFailsClosedWhenNoBoundAccountIsUsable(t *testing.T) {
+	s := quotaService(t)
+	ctx := context.Background()
+
+	missing, missingHeaders := boundKey(t, s, "missing")
+	if err := s.Store().ReplaceKeyAuthBindings(ctx, missing.ID, []store.KeyAuthBinding{{Provider: "codex", AuthID: "account-9"}}); err != nil {
+		t.Fatal(err)
+	}
+	id, handled, err := s.PickAuthForKey(ctx, missingHeaders, []AuthPickCandidate{{ID: "account-1", Provider: "codex"}})
+	if !handled || id != "" || !errors.Is(err, ErrNoBoundAuthAvailable) {
+		t.Fatalf("unlisted bound pick = (%q, %t, %v)", id, handled, err)
+	}
+
+	busy, busyHeaders := boundKey(t, s, "busy")
+	if err := s.Store().ReplaceKeyAuthBindings(ctx, busy.ID, []store.KeyAuthBinding{{Provider: "codex", AuthID: "account-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Store().UpsertAuthConcurrencyLimit(ctx, "codex", "account-1", 1); err != nil {
+		t.Fatal(err)
+	}
+	s.TrackAuthCapture("res-busy", "gpt")
+	if err := s.AdmitAuth(ctx, "res-busy", store.AuthIdentity{AuthID: "account-1", Provider: "codex"}); err != nil {
+		t.Fatal(err)
+	}
+	// account-2 is free but not bound, so it must not be used as a fallback.
+	_, handled, err = s.PickAuthForKey(ctx, busyHeaders, []AuthPickCandidate{
+		{ID: "account-1", Provider: "codex"},
+		{ID: "account-2", Provider: "codex"},
+	})
+	if !handled || !errors.Is(err, ErrNoBoundAuthAvailable) {
+		t.Fatalf("busy bound pick = handled:%t err:%v", handled, err)
+	}
+}
+
+func TestPickAuthForKeyKeepsUnboundBehaviour(t *testing.T) {
+	s := quotaService(t)
+	ctx := context.Background()
+	_, headers := boundKey(t, s, "unbound")
+	candidates := []AuthPickCandidate{{ID: "account-1", Provider: "codex"}, {ID: "account-2", Provider: "codex"}}
+	if id, handled, err := s.PickAuthForKey(ctx, headers, candidates); err != nil || handled || id != "" {
+		t.Fatalf("unlimited unbound pick = (%q, %t, %v)", id, handled, err)
+	}
+	if err := s.Store().UpsertAuthConcurrencyLimit(ctx, "codex", "account-1", 1); err != nil {
+		t.Fatal(err)
+	}
+	s.TrackAuthCapture("res-unbound", "gpt")
+	if err := s.AdmitAuth(ctx, "res-unbound", store.AuthIdentity{AuthID: "account-1", Provider: "codex"}); err != nil {
+		t.Fatal(err)
+	}
+	id, handled, err := s.PickAuthForKey(ctx, headers, candidates)
+	if err != nil || !handled || id != "account-2" {
+		t.Fatalf("limited unbound pick = (%q, %t, %v)", id, handled, err)
+	}
+}
+
+func TestPickAuthForKeyConcurrentRotationIsSafe(t *testing.T) {
+	s := quotaService(t)
+	ctx := context.Background()
+	key, headers := boundKey(t, s, "concurrent")
+	bindings := []store.KeyAuthBinding{{Provider: "codex", AuthID: "account-1"}, {Provider: "codex", AuthID: "account-2"}}
+	if err := s.Store().ReplaceKeyAuthBindings(ctx, key.ID, bindings); err != nil {
+		t.Fatal(err)
+	}
+	candidates := []AuthPickCandidate{{ID: "account-1", Provider: "codex"}, {ID: "account-2", Provider: "codex"}}
+	const calls = 40
+	results := make(chan string, calls)
+	errs := make(chan error, calls)
+	var wg sync.WaitGroup
+	for i := 0; i < calls; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			id, handled, err := s.PickAuthForKey(ctx, headers, candidates)
+			if err != nil || !handled {
+				errs <- err
+				return
+			}
+			results <- id
+		}()
+	}
+	wg.Wait()
+	close(results)
+	close(errs)
+	if len(errs) != 0 {
+		t.Fatalf("concurrent picks failed: %v", <-errs)
+	}
+	counts := map[string]int{}
+	for id := range results {
+		counts[id]++
+	}
+	if counts["account-1"] != calls/2 || counts["account-2"] != calls/2 {
+		t.Fatalf("concurrent rotation counts = %#v", counts)
+	}
+}
+
+func TestPickAuthForKeyRotatesEachKeyIndependently(t *testing.T) {
+	s := quotaService(t)
+	ctx := context.Background()
+	first, firstHeaders := boundKey(t, s, "first")
+	second, secondHeaders := boundKey(t, s, "second")
+	bindings := []store.KeyAuthBinding{{Provider: "codex", AuthID: "account-1"}, {Provider: "codex", AuthID: "account-2"}}
+	if err := s.Store().ReplaceKeyAuthBindings(ctx, first.ID, bindings); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Store().ReplaceKeyAuthBindings(ctx, second.ID, bindings); err != nil {
+		t.Fatal(err)
+	}
+	candidates := []AuthPickCandidate{{ID: "account-1", Provider: "codex"}, {ID: "account-2", Provider: "codex"}}
+	for _, tc := range []struct {
+		name    string
+		headers http.Header
+	}{{"first", firstHeaders}, {"second", secondHeaders}} {
+		var picked []string
+		for i := 0; i < 2; i++ {
+			id, handled, err := s.PickAuthForKey(ctx, tc.headers, candidates)
+			if err != nil || !handled {
+				t.Fatalf("%s pick %d = (%q, %t, %v)", tc.name, i, id, handled, err)
+			}
+			picked = append(picked, id)
+		}
+		// A shared cursor would make the second key start at account-2.
+		if picked[0] != "account-1" || picked[1] != "account-2" {
+			t.Fatalf("%s rotation = %v", tc.name, picked)
+		}
+	}
+}

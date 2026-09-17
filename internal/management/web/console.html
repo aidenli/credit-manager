@@ -166,6 +166,16 @@
               <p class="hint" id="keyModalTokenLimitsHint">填写数字才启用对应周期的 Token 上限；留空即不限制。</p>
               <div id="keyModalTokenLimits" class="token-limit-list"></div>
             </div>
+            <div class="modal-section" id="keyModalAuthBindingSection">
+              <p class="modal-section-title">限定 OAuth 账户<span>按账户隔离访问</span></p>
+              <div class="field-span-2 model-access-field">
+                <label for="keyModalAuthBindings">绑定账户（默认不限制；选择后仅限所选）</label>
+                <input id="keyModalAuthBindingFilter" autocomplete="off" spellcheck="false" placeholder="搜索账户 ID / 名称"/>
+                <select id="keyModalAuthBindings" multiple size="6" aria-describedby="keyModalAuthBindingsHint"></select>
+                <span class="hint" id="keyModalAuthBindingsHint">未选择表示不限制；选择后若全部不可用，请求将失败，不会使用其他账户。</span>
+                <span class="model-access-actions"><button type="button" class="btn ghost sm" id="btnKeyModalClearBindings">清除绑定：不限制账户</button></span>
+              </div>
+            </div>
             <div class="modal-section" id="keyModalCredentialSection">
               <p class="modal-section-title">凭据设置<span>生成方式</span></p>
               <div class="form-grid-2">

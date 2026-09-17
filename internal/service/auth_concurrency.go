@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
+	"github.com/yuluo688/credit-manager/internal/keys"
 	"github.com/yuluo688/credit-manager/internal/store"
 )
 
@@ -13,6 +16,11 @@ type AuthPickCandidate struct {
 	ID       string
 	Provider string
 }
+
+// ErrNoBoundAuthAvailable fails closed when a key binds OAuth accounts but none
+// of them can serve the request right now. It must never fall back to accounts
+// the key was not granted.
+var ErrNoBoundAuthAvailable = errors.New("bound oauth accounts are currently unavailable")
 
 func (s *Service) SetAuthConcurrencyLimit(ctx context.Context, provider, authID string, maxConcurrent int64) (AuthQuotaOverviewItem, error) {
 	provider, authID = authLimitProvider(provider), strings.TrimSpace(authID)
@@ -154,8 +162,86 @@ func (s *Service) PickAuth(ctx context.Context, candidates []AuthPickCandidate) 
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
 	s.ensureAuthPendingLocked()
-	available := make([]AuthPickCandidate, 0, len(candidates))
-	hasWarmupHold := false
+	available, hasWarmupHold := s.filterAvailableAuthLocked(limits, candidates)
+	if !anyLimit && !hasWarmupHold {
+		return "", false, nil
+	}
+	if len(available) == 0 {
+		return "", true, store.ErrConcurrentLimit
+	}
+	chosen := s.nextAuthPickLocked("", available)
+	s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: strings.TrimSpace(chosen.ID), Provider: chosen.Provider})
+	return strings.TrimSpace(chosen.ID), true, nil
+}
+
+// PickAuthForKey routes one scheduler decision for the key behind the request.
+// Keys without bindings keep the unbound behaviour unchanged. Bound keys may
+// only use their own accounts and fail closed when none of them is available.
+func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candidates []AuthPickCandidate) (authID string, handled bool, err error) {
+	if s == nil {
+		return "", false, nil
+	}
+	rawKey := bearerToken(headers)
+	if _, parseErr := keys.Parse(rawKey); parseErr != nil {
+		// Requests not carrying a plugin key remain under the host scheduler.
+		return s.PickAuth(ctx, candidates)
+	}
+	key, keyErr := s.LookupPluginKey(ctx, rawKey)
+	if keyErr != nil {
+		// A plugin-shaped credential must not bypass account isolation when key
+		// lookup or verification fails.
+		return "", true, keyErr
+	}
+	bindings, err := s.store.ListKeyAuthBindings(ctx, key.ID)
+	if err != nil {
+		return "", false, err
+	}
+	if len(bindings) == 0 {
+		return s.PickAuth(ctx, candidates)
+	}
+	bound := make(map[string]struct{}, len(bindings))
+	for _, binding := range bindings {
+		provider, id := authLimitProvider(binding.Provider), strings.TrimSpace(binding.AuthID)
+		if provider == "" || id == "" {
+			continue
+		}
+		bound[provider+"\x00"+id] = struct{}{}
+	}
+	scoped := make([]AuthPickCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		provider, id := authLimitProvider(candidate.Provider), strings.TrimSpace(candidate.ID)
+		if provider == "" || id == "" {
+			continue
+		}
+		if _, ok := bound[provider+"\x00"+id]; !ok {
+			continue
+		}
+		scoped = append(scoped, candidate)
+	}
+	if len(scoped) == 0 {
+		return "", true, ErrNoBoundAuthAvailable
+	}
+	limits, err := s.store.ListAuthConcurrencyLimits(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	s.ensureAuthPendingLocked()
+	available, _ := s.filterAvailableAuthLocked(limits, scoped)
+	if len(available) == 0 {
+		return "", true, ErrNoBoundAuthAvailable
+	}
+	// Bound keys keep their own cursor so one key cannot skew another key's rotation.
+	chosen := s.nextAuthPickLocked(key.ID+"\x00"+authLimitProvider(available[0].Provider), available)
+	s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: strings.TrimSpace(chosen.ID), Provider: chosen.Provider})
+	return strings.TrimSpace(chosen.ID), true, nil
+}
+
+// filterAvailableAuthLocked drops candidates that are warmup-held or already at
+// their concurrency cap. Callers must hold authMu.
+func (s *Service) filterAvailableAuthLocked(limits map[string]int64, candidates []AuthPickCandidate) (available []AuthPickCandidate, hasWarmupHold bool) {
+	available = make([]AuthPickCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		limit := authConcurrencyLimitOf(limits, candidate)
 		provider, id := authLimitProvider(candidate.Provider), strings.TrimSpace(candidate.ID)
@@ -168,15 +254,7 @@ func (s *Service) PickAuth(ctx context.Context, candidates []AuthPickCandidate) 
 		}
 		available = append(available, candidate)
 	}
-	if !anyLimit && !hasWarmupHold {
-		return "", false, nil
-	}
-	if len(available) == 0 {
-		return "", true, store.ErrConcurrentLimit
-	}
-	chosen := s.nextAuthPickLocked(available)
-	s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: strings.TrimSpace(chosen.ID), Provider: chosen.Provider})
-	return strings.TrimSpace(chosen.ID), true, nil
+	return available, hasWarmupHold
 }
 
 func (s *Service) withAuthConcurrency(ctx context.Context, item AuthQuotaOverviewItem) AuthQuotaOverviewItem {
@@ -248,11 +326,16 @@ func (s *Service) bindOldestUnattributedLocked(auth store.AuthIdentity) {
 	oldest.hasAuth = true
 }
 
-func (s *Service) nextAuthPickLocked(available []AuthPickCandidate) AuthPickCandidate {
+// nextAuthPickLocked round-robins inside one cursor scope. An empty scope keeps
+// the shared provider-wide cursor; bound keys pass their own scope.
+func (s *Service) nextAuthPickLocked(scope string, available []AuthPickCandidate) AuthPickCandidate {
 	if s.authPickCursor == nil {
 		s.authPickCursor = map[string]int{}
 	}
-	key := authLimitProvider(available[0].Provider)
+	key := scope
+	if key == "" {
+		key = authLimitProvider(available[0].Provider)
+	}
 	if key == "" {
 		key = "auth"
 	}

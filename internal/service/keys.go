@@ -32,6 +32,7 @@ type MintKeyRequest struct {
 	AllowedModels         []string
 	ModelTokenLimits      []store.ModelTokenLimit
 	UnmatchedModelsMode   string
+	AuthBindings          []store.KeyAuthBinding
 	Enabled               *bool
 	KeyMaterial           string
 }
@@ -79,6 +80,7 @@ func (s *Service) MintKeyWithPolicy(ctx context.Context, req MintKeyRequest) (st
 		AllowedModels:         req.AllowedModels,
 		ModelTokenLimits:      req.ModelTokenLimits,
 		UnmatchedModelsMode:   req.UnmatchedModelsMode,
+		AuthBindings:          req.AuthBindings,
 	})
 	if err != nil {
 		return store.PluginKey{}, keys.Material{}, err

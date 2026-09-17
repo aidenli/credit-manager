@@ -1,6 +1,7 @@
 package management
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -63,6 +64,44 @@ func keyView(key store.PluginKey) map[string]any {
 		"last_used_at":            key.LastUsedAt,
 		"created_at":              key.CreatedAt,
 	}
+}
+
+// keyViewWithBindings attaches the key's OAuth bindings, which live in their own
+// table and are not part of the key aggregate.
+func keyViewWithBindings(key store.PluginKey, bindings []store.KeyAuthBinding) map[string]any {
+	view := keyView(key)
+	view["auth_bindings"] = bindingViews(bindings)
+	return view
+}
+
+func bindingViews(bindings []store.KeyAuthBinding) []map[string]any {
+	out := make([]map[string]any, 0, len(bindings))
+	for _, item := range bindings {
+		out = append(out, map[string]any{
+			"provider": item.Provider,
+			"auth_id":  item.AuthID,
+			"priority": item.Priority,
+		})
+	}
+	return out
+}
+
+// keyViewsWithBindings renders many keys while loading every binding list in one
+// query, so list endpoints stay one query per page instead of one per key.
+func keyViewsWithBindings(ctx context.Context, st *store.Store, keys []store.PluginKey) ([]map[string]any, error) {
+	ids := make([]string, 0, len(keys))
+	for _, key := range keys {
+		ids = append(ids, key.ID)
+	}
+	bindings, err := st.ListKeyAuthBindingsByKeyIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]map[string]any, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, keyViewWithBindings(key, bindings[key.ID]))
+	}
+	return out, nil
 }
 
 func unmatchedModelsModeView(mode string) string {

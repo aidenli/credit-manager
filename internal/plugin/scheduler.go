@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/yuluo688/credit-manager/internal/service"
 
@@ -32,12 +33,19 @@ func pickAuth(raw []byte) ([]byte, error) {
 		}
 		return okEnvelope(pluginapi.SchedulerPickResponse{AuthID: authID, Handled: true})
 	}
-	authID, handled, err := svc.PickAuth(context.Background(), candidates)
+	authID, handled, err := svc.PickAuthForKey(context.Background(), req.Options.Headers, candidates)
 	if err != nil {
-		return errorEnvelope("limit_rejected", err.Error()), nil
+		return errorEnvelope(authPickErrorCode(err), err.Error()), nil
 	}
 	return okEnvelope(pluginapi.SchedulerPickResponse{
 		AuthID:  authID,
 		Handled: handled,
 	})
+}
+
+func authPickErrorCode(err error) string {
+	if errors.Is(err, service.ErrNoBoundAuthAvailable) {
+		return "bound_auth_unavailable"
+	}
+	return "limit_rejected"
 }

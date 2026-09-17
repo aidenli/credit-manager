@@ -247,6 +247,8 @@
     modelPrices: {},
     modelCatalogError: '',
     availableModels: [],
+    keyAuthAccounts: [],
+    keyAuthAccountsLoaded: false,
     pricingPage: 1,
     pricingPageSize: 10,
     pricingSearch: '',
@@ -2946,6 +2948,82 @@
     return Array.from($('keyModalModels').selectedOptions).map(option => option.value);
   }
 
+  // OAuth account bindings. Accounts are listed from the paginated auth-quotas
+  // overview; when that list is unavailable the modal must not touch bindings.
+  function bindingKey(provider, authID) {
+    return String(provider || '').trim().toLowerCase() + '\u0000' + String(authID || '').trim();
+  }
+
+  function bindingLabel(account) {
+    return account.provider + ' · ' + (account.label || account.auth_id);
+  }
+
+  function selectedKeyAuthBindings() {
+    return Array.from($('keyModalAuthBindings').selectedOptions).map(option => {
+      try { return JSON.parse(option.value); } catch (_) { return null; }
+    }).filter(Boolean);
+  }
+
+  function renderKeyAuthBindings(selected) {
+    const bindings = selected || [];
+    const selectedKeys = new Set(bindings.map(item => bindingKey(item.provider, item.auth_id)));
+    const query = $('keyModalAuthBindingFilter').value.trim().toLowerCase();
+    const accounts = (state.keyAuthAccounts || []).slice();
+    bindings.forEach(item => {
+      if (!accounts.some(account => bindingKey(account.provider, account.auth_id) === bindingKey(item.provider, item.auth_id))) {
+        accounts.push({ provider: item.provider, auth_id: item.auth_id, label: item.auth_id + '（当前不可用）' });
+      }
+    });
+    const visible = accounts.filter(account => {
+      if (!query || selectedKeys.has(bindingKey(account.provider, account.auth_id))) return true;
+      return [account.auth_id, account.label, account.provider].some(value => String(value || '').toLowerCase().includes(query));
+    }).sort((a, b) => bindingLabel(a).localeCompare(bindingLabel(b)));
+    const picker = $('keyModalAuthBindings');
+    picker.innerHTML = visible.map(account => {
+      const value = esc(JSON.stringify({ provider: account.provider, auth_id: account.auth_id }));
+      const on = selectedKeys.has(bindingKey(account.provider, account.auth_id)) ? ' selected' : '';
+      return '<option value="' + value + '"' + on + '>' + esc(bindingLabel(account)) + '</option>';
+    }).join('');
+    refreshCustomControl(picker);
+  }
+
+  async function loadKeyAuthBindings(bindings) {
+    // A missing field means the key view cannot be trusted, so saving must leave
+    // existing bindings alone instead of clearing them.
+    const readable = Array.isArray(bindings);
+    const selected = readable ? bindings : [];
+    state.keyAuthAccounts = [];
+    state.keyAuthAccountsLoaded = false;
+    $('keyModalAuthBindingsHint').textContent = '正在加载认证账户…';
+    renderKeyAuthBindings(selected);
+    if (!readable) {
+      $('keyModalAuthBindingsHint').textContent = '无法读取当前绑定；保存时不会修改绑定。';
+      return;
+    }
+    try {
+      // Host candidates fall back to auth_index when an account has no auth id.
+      state.keyAuthAccounts = (await loadAuthWarmupAuths())
+        .filter(account => account.auth_id || account.auth_index)
+        .map(account => ({ provider: account.provider, auth_id: account.auth_id || account.auth_index, label: account.label }));
+      state.keyAuthAccountsLoaded = true;
+    } catch (e) {
+      $('keyModalAuthBindingsHint').textContent = '账户列表加载失败：' + e.message + '。保存时不会修改现有绑定。';
+      return;
+    }
+    $('keyModalAuthBindingsHint').textContent = selected.length
+      ? '仅允许使用所选账户；若全部不可用，请求将失败，不会使用其他账户。'
+      : '未选择表示不限制；选择后若全部不可用，请求将失败，不会使用其他账户。';
+    renderKeyAuthBindings(selected);
+  }
+
+  function clearKeyAuthBindings() {
+    const picker = $('keyModalAuthBindings');
+    if (picker.disabled) return;
+    Array.from(picker.options).forEach(option => { option.selected = false; });
+    dispatchControlChange(picker);
+    refreshCustomControl(picker);
+  }
+
   function tokenLimitPeriodValue(period) {
     period = period || {};
     const tokens = Number(period.tokens || 0);
@@ -2989,6 +3067,13 @@
       return { model_token_limits: [], unmatched_models_mode: 'available' };
     }
     return { model_token_limits: collectModelTokenLimits(), unmatched_models_mode: unmatchedModelsMode() };
+  }
+
+  // Without a loaded account list the field is omitted entirely: the update
+  // endpoint then keeps whatever bindings the key already has.
+  function keyAuthBindingsPayload() {
+    if (!state.keyAuthAccountsLoaded) return {};
+    return { auth_bindings: selectedKeyAuthBindings() };
   }
 
   function collectModelTokenLimits() {
@@ -3212,6 +3297,7 @@
     modal.setAttribute('aria-hidden', 'false');
     $('keyModalLabel').focus();
     void loadKeyModels(allowedModels);
+    void loadKeyAuthBindings(key ? key.auth_bindings : []);
   }
 
   function closeKeyModal() {
@@ -3290,6 +3376,7 @@
         enabled: $('keyModalEnabled').checked,
         allowed_models: selectedKeyModels(),
         ...collectKeyTokenLimitPayload(),
+        ...keyAuthBindingsPayload(),
         ...expiry,
         key_material: keyMaterial,
       });
@@ -3307,6 +3394,7 @@
         allowed_models: selectedKeyModels(),
         set_model_token_limits: true,
         ...collectKeyTokenLimitPayload(),
+        ...keyAuthBindingsPayload(),
         ...expiry,
       });
     } else {
@@ -6016,6 +6104,8 @@
     dispatchControlChange(picker);
     refreshCustomControl(picker);
   });
+  $('keyModalAuthBindingFilter').addEventListener('input', () => renderKeyAuthBindings(selectedKeyAuthBindings()));
+  $('btnKeyModalClearBindings').addEventListener('click', clearKeyAuthBindings);
   $('btnAddKeyTokenLimit').addEventListener('click', () => addKeyTokenLimit($('keyModalTokenLimitModel').value));
   $('keyModalTokenLimitModel').addEventListener('focus', openTokenLimitModelSearch);
   $('keyModalTokenLimitModel').addEventListener('input', openTokenLimitModelSearch);

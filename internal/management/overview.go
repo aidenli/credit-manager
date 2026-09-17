@@ -43,9 +43,9 @@ func getOverview(ctx context.Context, svc *service.Service, query map[string][]s
 	if err != nil {
 		return jsonErr(http.StatusInternalServerError, err.Error()), nil
 	}
-	keyViews := make([]map[string]any, 0, len(keys))
-	for _, k := range keys {
-		keyViews = append(keyViews, keyView(k))
+	keyViews, err := keyViewsWithBindings(ctx, svc.Store(), keys)
+	if err != nil {
+		return jsonErr(http.StatusInternalServerError, err.Error()), nil
 	}
 	usageViews := make([]map[string]any, 0, len(recent))
 	for _, u := range recent {
@@ -76,5 +76,11 @@ func getBalance(ctx context.Context, svc *service.Service, query map[string][]st
 	if err != nil {
 		return jsonErr(http.StatusNotFound, err.Error()), nil
 	}
-	return jsonOK(keyView(key)), nil
+	// Keep the response shape identical to the key list so clients that render a
+	// key view cannot mistake a missing field for "no bindings".
+	bindings, err := svc.Store().ListKeyAuthBindings(ctx, key.ID)
+	if err != nil {
+		return jsonErr(http.StatusInternalServerError, err.Error()), nil
+	}
+	return jsonOK(keyViewWithBindings(key, bindings)), nil
 }

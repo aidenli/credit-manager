@@ -78,6 +78,7 @@ type PluginKeySpec struct {
 	AllowedModels         []string
 	ModelTokenLimits      []ModelTokenLimit
 	UnmatchedModelsMode   string
+	AuthBindings          []KeyAuthBinding
 }
 
 // PluginKeyPolicyUpdate patches mutable admin fields on a key.
@@ -93,6 +94,7 @@ type PluginKeyPolicyUpdate struct {
 	AllowedModels         *[]string
 	ModelTokenLimits      *[]ModelTokenLimit
 	UnmatchedModelsMode   *string
+	AuthBindings          *[]KeyAuthBinding
 	ExpiresAt             *time.Time
 	ClearExpiresAt        bool
 }
@@ -130,7 +132,12 @@ func (s *Store) CreatePluginKey(ctx context.Context, spec PluginKeySpec) (Plugin
 		expires = spec.ExpiresAt.UTC().UnixMilli()
 	}
 	quota := int64(spec.QuotaMicroUSD)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO plugin_keys(
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return PluginKey{}, fmt.Errorf("create plugin key: %w", err)
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO plugin_keys(
 		id, caller_id, kid, key_hash, encrypted_key_material, pepper_id, fingerprint, label, principal, caller_scope,
 		enabled, expires_at_unix_ms, created_at_unix_ms, updated_at_unix_ms,
 		quota_micro_usd, daily_quota_micro_usd, weekly_quota_micro_usd, monthly_quota_micro_usd, max_concurrent_requests,
@@ -140,6 +147,12 @@ func (s *Store) CreatePluginKey(ctx context.Context, spec PluginKeySpec) (Plugin
 		spec.PepperID, spec.Fingerprint, spec.Label, spec.Principal, spec.CallerScope,
 		boolInt(spec.Enabled), expires, now, now, quota, spec.DailyQuotaMicroUSD, spec.WeeklyQuotaMicroUSD, spec.MonthlyQuotaMicroUSD, spec.MaxConcurrentRequests, modelsJSON, tokenLimitsJSON, unmatchedMode)
 	if err != nil {
+		return PluginKey{}, fmt.Errorf("create plugin key: %w", err)
+	}
+	if err := replaceKeyAuthBindingsTx(ctx, tx, spec.ID, spec.AuthBindings); err != nil {
+		return PluginKey{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return PluginKey{}, fmt.Errorf("create plugin key: %w", err)
 	}
 	return s.GetPluginKey(ctx, spec.ID)
@@ -193,6 +206,10 @@ func (s *Store) RotatePluginKey(ctx context.Context, oldKeyID string, spec Plugi
 		boolInt(spec.Enabled), expires, now, now, int64(spec.QuotaMicroUSD), spec.DailyQuotaMicroUSD, spec.WeeklyQuotaMicroUSD, spec.MonthlyQuotaMicroUSD, spec.MaxConcurrentRequests, modelsJSON, tokenLimitsJSON, unmatchedMode)
 	if err != nil {
 		return PluginKey{}, fmt.Errorf("create replacement plugin key: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO key_auth_bindings(plugin_key_id, provider, auth_id, priority, created_at_unix_ms)
+		SELECT ?, provider, auth_id, priority, ? FROM key_auth_bindings WHERE plugin_key_id = ?`, spec.ID, now, oldKeyID); err != nil {
+		return PluginKey{}, fmt.Errorf("copy replacement plugin key bindings: %w", err)
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE plugin_keys
 		SET enabled = 0, revoked_at_unix_ms = ?, updated_at_unix_ms = ?
@@ -395,7 +412,12 @@ func (s *Store) UpdatePluginKeyPolicy(ctx context.Context, update PluginKeyPolic
 		expires = key.ExpiresAt.UTC().UnixMilli()
 	}
 	now := nowUnixMilli()
-	result, err := s.db.ExecContext(ctx, `UPDATE plugin_keys SET
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return PluginKey{}, fmt.Errorf("update plugin key policy: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE plugin_keys SET
 		label = ?, enabled = ?, quota_micro_usd = ?, daily_quota_micro_usd = ?, weekly_quota_micro_usd = ?,
 		monthly_quota_micro_usd = ?, max_concurrent_requests = ?, allowed_models_json = ?, model_token_limits_json = ?,
 		unmatched_models_mode = ?, expires_at_unix_ms = ?, updated_at_unix_ms = ?
@@ -408,6 +430,14 @@ func (s *Store) UpdatePluginKeyPolicy(ctx context.Context, update PluginKeyPolic
 	}
 	if err := requireOneRow(result, ErrPluginKeyNotFound); err != nil {
 		return PluginKey{}, err
+	}
+	if update.AuthBindings != nil {
+		if err := replaceKeyAuthBindingsTx(ctx, tx, update.ID, *update.AuthBindings); err != nil {
+			return PluginKey{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return PluginKey{}, fmt.Errorf("update plugin key policy: %w", err)
 	}
 	return s.GetPluginKey(ctx, update.ID)
 }
@@ -425,18 +455,33 @@ func (s *Store) RevokePluginKey(ctx context.Context, id string) error {
 
 // DeletePluginKey revokes a key while retaining its records as immutable
 // accounting history. The compatibility caller is intentionally retained.
+// Auth bindings are removed with the key so no orphaned routing rule survives.
 func (s *Store) DeletePluginKey(ctx context.Context, id string) error {
 	if strings.TrimSpace(id) == "" {
 		return fmt.Errorf("%w: plugin key id is required", ErrInvalidArgument)
 	}
 	now := nowUnixMilli()
-	result, err := s.db.ExecContext(ctx, `UPDATE plugin_keys
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("delete plugin key: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE plugin_keys
 		SET enabled = 0, revoked_at_unix_ms = COALESCE(revoked_at_unix_ms, ?), updated_at_unix_ms = ?
 		WHERE id = ?`, now, now, id)
 	if err != nil {
 		return fmt.Errorf("delete plugin key: %w", err)
 	}
-	return requireOneRow(result, ErrPluginKeyNotFound)
+	if err := requireOneRow(result, ErrPluginKeyNotFound); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM key_auth_bindings WHERE plugin_key_id = ?`, id); err != nil {
+		return fmt.Errorf("delete plugin key bindings: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete plugin key: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) TouchPluginKeyUsed(ctx context.Context, id string) error {

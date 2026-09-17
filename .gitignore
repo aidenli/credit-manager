@@ -32,3 +32,6 @@ data/
 # IDE settings.
 .idea/
 .vscode/
+
+# Local AI assistant session state.
+.workbuddy-ai/

@@ -16,6 +16,25 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
+// bindingInput is one OAuth account restriction supplied by the management API.
+type bindingInput struct {
+	Provider string `json:"provider"`
+	AuthID   string `json:"auth_id"`
+}
+
+// keyAuthBindings validates requested bindings before any key is written.
+func keyAuthBindings(items []bindingInput) ([]store.KeyAuthBinding, error) {
+	out := make([]store.KeyAuthBinding, 0, len(items))
+	for _, item := range items {
+		provider, authID := strings.TrimSpace(item.Provider), strings.TrimSpace(item.AuthID)
+		if provider == "" || authID == "" {
+			return nil, errors.New("auth_bindings requires provider and auth_id")
+		}
+		out = append(out, store.KeyAuthBinding{Provider: provider, AuthID: authID})
+	}
+	return out, nil
+}
+
 func createKey(ctx context.Context, svc *service.Service, body []byte) (pluginapi.ManagementResponse, error) {
 	var req struct {
 		CallerID              string                  `json:"caller_id"`
@@ -31,10 +50,15 @@ func createKey(ctx context.Context, svc *service.Service, body []byte) (pluginap
 		AllowedModels         []string                `json:"allowed_models"`
 		ModelTokenLimits      []store.ModelTokenLimit `json:"model_token_limits"`
 		UnmatchedModelsMode   string                  `json:"unmatched_models_mode"`
+		AuthBindings          []bindingInput          `json:"auth_bindings"`
 		Enabled               *bool                   `json:"enabled"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		return jsonErr(http.StatusBadRequest, "invalid json"), nil
+	}
+	authBindings, err := keyAuthBindings(req.AuthBindings)
+	if err != nil {
+		return jsonErr(http.StatusBadRequest, err.Error()), nil
 	}
 	var expires *time.Time
 	if strings.TrimSpace(req.ExpiresAt) != "" {
@@ -74,14 +98,19 @@ func createKey(ctx context.Context, svc *service.Service, body []byte) (pluginap
 		AllowedModels:         req.AllowedModels,
 		ModelTokenLimits:      req.ModelTokenLimits,
 		UnmatchedModelsMode:   req.UnmatchedModelsMode,
+		AuthBindings:          authBindings,
 		Enabled:               req.Enabled,
 	})
 	if err != nil {
 		return jsonErr(http.StatusBadRequest, err.Error()), nil
 	}
+	bindings, err := svc.Store().ListKeyAuthBindings(ctx, key.ID)
+	if err != nil {
+		return jsonErr(http.StatusInternalServerError, err.Error()), nil
+	}
 	headers := http.Header{}
 	headers.Set("Cache-Control", "no-store")
-	view := keyView(key)
+	view := keyViewWithBindings(key, bindings)
 	view["plaintext"] = material.Plaintext
 	return pluginapi.ManagementResponse{
 		StatusCode: http.StatusOK,
@@ -105,9 +134,13 @@ func rotateKey(ctx context.Context, svc *service.Service, body []byte) (pluginap
 		}
 		return jsonErr(http.StatusBadRequest, err.Error()), nil
 	}
+	bindings, err := svc.Store().ListKeyAuthBindings(ctx, key.ID)
+	if err != nil {
+		return jsonErr(http.StatusInternalServerError, err.Error()), nil
+	}
 	headers := http.Header{}
 	headers.Set("Cache-Control", "no-store")
-	view := keyView(key)
+	view := keyViewWithBindings(key, bindings)
 	view["plaintext"] = material.Plaintext
 	return pluginapi.ManagementResponse{
 		StatusCode: http.StatusOK,
@@ -139,9 +172,9 @@ func listKeys(ctx context.Context, svc *service.Service, query map[string][]stri
 	if err != nil {
 		return jsonErr(http.StatusInternalServerError, err.Error()), nil
 	}
-	out := make([]map[string]any, 0, len(items))
-	for _, item := range items {
-		out = append(out, keyView(item))
+	out, err := keyViewsWithBindings(ctx, svc.Store(), items)
+	if err != nil {
+		return jsonErr(http.StatusInternalServerError, err.Error()), nil
 	}
 	return jsonOK(map[string]any{
 		"items":       out,
@@ -168,16 +201,26 @@ func updateKey(ctx context.Context, svc *service.Service, body []byte) (pluginap
 		ModelTokenLimits      []store.ModelTokenLimit `json:"model_token_limits"`
 		SetModelTokenLimits   bool                    `json:"set_model_token_limits"`
 		UnmatchedModelsMode   *string                 `json:"unmatched_models_mode"`
+		AuthBindings          *[]bindingInput         `json:"auth_bindings"`
 		ExpiresAt             string                  `json:"expires_at"`
 		ClearExpiresAt        bool                    `json:"clear_expires_at"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		return jsonErr(http.StatusBadRequest, "invalid json"), nil
 	}
+	var authBindings *[]store.KeyAuthBinding
+	if req.AuthBindings != nil {
+		parsed, err := keyAuthBindings(*req.AuthBindings)
+		if err != nil {
+			return jsonErr(http.StatusBadRequest, err.Error()), nil
+		}
+		authBindings = &parsed
+	}
 	update := store.PluginKeyPolicyUpdate{
 		ID:             req.ID,
 		Label:          req.Label,
 		Enabled:        req.Enabled,
+		AuthBindings:   authBindings,
 		ClearExpiresAt: req.ClearExpiresAt,
 	}
 	if req.QuotaMicroUSD != nil {
@@ -233,7 +276,11 @@ func updateKey(ctx context.Context, svc *service.Service, body []byte) (pluginap
 		}
 		return jsonErr(http.StatusBadRequest, err.Error()), nil
 	}
-	return jsonOK(keyView(key)), nil
+	bindings, err := svc.Store().ListKeyAuthBindings(ctx, key.ID)
+	if err != nil {
+		return jsonErr(http.StatusInternalServerError, err.Error()), nil
+	}
+	return jsonOK(keyViewWithBindings(key, bindings)), nil
 }
 
 func revokeKey(ctx context.Context, svc *service.Service, body []byte) (pluginapi.ManagementResponse, error) {
