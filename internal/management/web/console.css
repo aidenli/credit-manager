@@ -1076,14 +1076,16 @@ html[data-palette="dark"] .list-search::before { filter:brightness(0) invert(1);
 .pricing-layout .pricing-list-header { padding:14px 18px; margin-bottom:0; border-bottom:1px solid var(--line); background:var(--panel); }
 .pricing-layout #pricingTable { padding:10px 14px 0; }
 .pricing-layout #pricingPagination { margin:14px 14px 16px; }
-.keys-table { width:100%; min-width:1224px; table-layout:fixed; }
+.keys-table { width:100%; min-width:1512px; table-layout:fixed; }
 .keys-table th:nth-child(1), .keys-table td:nth-child(1) { width:42px; min-width:42px; max-width:42px; padding-left:10px; padding-right:10px; }
 .keys-table th:nth-child(2) { width:8rem; }
 .keys-table th:nth-child(3) { width:11.5rem; }
 .keys-table th:nth-child(4) { width:16.5rem; }
 .keys-table th:nth-child(5) { width:7.75rem; }
-.keys-table th:nth-child(6) { width:5.5rem; }
-.keys-table th:nth-child(7) { width:21rem; }
+/* Bound OAuth accounts may list several long auth ids, so this column gets room. */
+.keys-table th:nth-child(6) { width:20rem; }
+.keys-table th:nth-child(7) { width:5.5rem; }
+.keys-table th:nth-child(8) { width:21rem; }
 .keys-table th { position:sticky; top:0; z-index:1; background:#f7faf7; white-space:nowrap; }
 .keys-table td { vertical-align:middle; padding:14px 10px; }
 .keys-table td:nth-child(4), .keys-table td:nth-child(5) { white-space:nowrap; }
@@ -1172,7 +1174,8 @@ html[data-palette="dark"] .list-search::before { filter:brightness(0) invert(1);
 /* Bound OAuth accounts: one account per line in the key list. */
 .key-bindings { display:grid; gap:2px; min-width:0; }
 .key-bindings-none { color:var(--table-muted); font-size:.8rem; }
-.key-binding-item { overflow:hidden; color:var(--table-text); font-size:.8rem; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }
+/* No ellipsis: bound accounts must stay fully readable to be trustworthy. */
+.key-binding-item { color:var(--table-text); font-size:.8rem; line-height:1.35; overflow-wrap:anywhere; }
 .row-actions {
   display:inline-flex;
   flex-wrap:nowrap;
@@ -1264,11 +1267,12 @@ html[data-palette="dark"] .key-select input:indeterminate + .key-select-ui::afte
   }
   .keys-table td:nth-child(1) { grid-column:1; grid-row:1; align-self:center; width:auto; min-width:0; max-width:none; padding:0; }
   .keys-table td:nth-child(2) { grid-column:2; grid-row:1; min-width:0; }
-  .keys-table td:nth-child(6) { grid-column:3; grid-row:1; align-self:center; }
+  .keys-table td:nth-child(7) { grid-column:3; grid-row:1; align-self:center; }
   .keys-table td:nth-child(3),
   .keys-table td:nth-child(4),
   .keys-table td:nth-child(5),
-  .keys-table td:nth-child(7) { grid-column:1 / -1; }
+  .keys-table td:nth-child(6),
+  .keys-table td:nth-child(8) { grid-column:1 / -1; }
   .keys-table .model-chip-row { max-height:none; }
   .keys-table .key-label strong { white-space:normal; overflow:visible; text-overflow:unset; }
   .keys-table .quota-line { justify-content:flex-start; gap:10px; }
