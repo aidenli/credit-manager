@@ -1169,6 +1169,10 @@ html[data-palette="dark"] .list-search::before { filter:brightness(0) invert(1);
 .spend-cell { display:grid; gap:2px; }
 .spend-cell .primary { font-weight:700; letter-spacing:-.01em; font-size:.92rem; color:var(--table-text); }
 .spend-cell .secondary { color:var(--table-muted); font-size:.8rem; font-weight:500; }
+/* Bound OAuth accounts: one account per line in the key list. */
+.key-bindings { display:grid; gap:2px; min-width:0; }
+.key-bindings-none { color:var(--table-muted); font-size:.8rem; }
+.key-binding-item { overflow:hidden; color:var(--table-text); font-size:.8rem; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }
 .row-actions {
   display:inline-flex;
   flex-wrap:nowrap;
@@ -1711,6 +1715,8 @@ html[data-palette="dark"] .auth-warmup-settings-footer .btn.ghost { background:#
 .auth-quota-period-option.is-partial .auth-quota-period-option-mark { background:#d8942b; }
 @keyframes auth-quota-period-menu-in { from { opacity:0; transform:translateY(-4px) scale(.985); } to { opacity:1; transform:translateY(0) scale(1); } }
 .auth-quota-error { flex:0 0 auto; margin:0 12px 8px; padding:6px 8px; border:1px solid #f1d3cf; border-radius:8px; background:#fff7f5; color:#bd443b; font-size:.72rem; line-height:1.35; overflow-wrap:anywhere; }
+/* Account note from the host auth file, pinned to the bottom of the card. */
+.auth-quota-note { flex:0 0 auto; margin:0; padding:6px 12px 8px; border-top:1px dashed var(--line); color:var(--table-muted); font-size:.72rem; line-height:1.4; overflow-wrap:anywhere; }
 .auth-quota-window-grid { display:grid; grid-template-columns:1fr; gap:6px; flex:1 1 auto; align-content:start; min-height:0; padding:6px 8px 8px; border-top:1px solid var(--line); background:linear-gradient(180deg, rgba(247,250,247,.78), rgba(247,250,247,.48)); }
 .auth-quota-window-grid:has(> .empty-state) { display:flex; flex-direction:column; }
 .auth-quota-window-grid > .empty-state { flex:1 1 auto; width:100%; min-height:56px; padding:10px 8px; font-size:.76rem; }
@@ -1743,6 +1749,7 @@ html[data-palette="dark"] .auth-quota-window-card:hover { border-color:#6c8979; 
 html[data-palette="dark"] .auth-quota-bar { background:#3a403b; }
 html[data-palette="dark"] .auth-quota-bar.unknown { --quota-color:#5a635d; }
 html[data-palette="dark"] .auth-quota-error { border-color:#70413b; background:#422522; color:#ffb5aa; }
+html[data-palette="dark"] .auth-quota-note { border-top-color:#48423b; color:#a9a29a; }
 html[data-palette="dark"] .auth-quota-period-trigger { border-color:#4b5c52; background:linear-gradient(180deg, #272b28, #222622); color:#e8ece9; box-shadow:none; }
 html[data-palette="dark"] .auth-quota-period-trigger:hover, html[data-palette="dark"] .auth-quota-period-picker.is-open .auth-quota-period-trigger { border-color:#629a82; background:#29362f; }
 html[data-palette="dark"] .auth-quota-period-menu { border-color:#4b5c52; background:rgba(34,38,35,.98); box-shadow:0 14px 30px rgba(0,0,0,.38); }

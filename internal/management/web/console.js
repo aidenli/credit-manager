@@ -64,6 +64,8 @@
     '实时美元兑人民币汇率': { 'zh-TW':'即時美元兌人民幣匯率', en:'Live USD to CNY rate', ru:'Курс USD к CNY' },
     '汇率获取失败，已使用上次汇率': { 'zh-TW':'匯率取得失敗，已使用上次匯率', en:'Could not refresh the rate; using the last saved value', ru:'Не удалось обновить курс; используется прошлое значение' },
     '不限制': { 'zh-TW':'不限制', en:'Unlimited', ru:'Без ограничений' },
+    '绑定账户': { 'zh-TW':'綁定帳戶', en:'Bound accounts', ru:'Привязанные аккаунты' },
+    '未绑定账号时由宿主调度选择账户': { 'zh-TW':'未綁定帳號時由宿主排程選擇帳戶', en:'Unbound: the host scheduler chooses the account', ru:'Без привязки аккаунт выбирает планировщик хоста' },
     '已用': { 'zh-TW':'已用', en:'Used', ru:'Использовано' }, '剩余': { 'zh-TW':'剩餘', en:'Remaining', ru:'Осталось' }, '限额': { 'zh-TW':'限額', en:'Cap', ru:'Лимит' },
     '同步': { 'zh-TW':'同步', en:'Synced', ru:'Синхр.' }, '最新': { 'zh-TW':'最新', en:'Fresh', ru:'Актуально' }, '缓存过期': { 'zh-TW':'快取過期', en:'Stale', ru:'Устарело' }, '不可用': { 'zh-TW':'不可用', en:'Unavailable', ru:'Недоступно' },
     '未命名认证': { 'zh-TW':'未命名認證', en:'Unnamed auth', ru:'Без имени' }, '未知提供商': { 'zh-TW':'未知供應商', en:'Unknown provider', ru:'Неизвестный провайдер' },
@@ -2526,7 +2528,7 @@
         '</div>';
     };
 
-    $('keysTable').innerHTML = '<div class="table-scroll"><table class="keys-table"><thead><tr><th class="key-select-column"><label class="key-select" title="'+esc(t('全选密钥'))+'"><input type="checkbox" data-select-all-keys aria-label="'+esc(t('全选密钥'))+'"/><span class="key-select-ui" aria-hidden="true"></span></label></th><th>标签</th><th>可用模型</th><th>密钥限额</th><th>已用 / 剩余</th><th>状态</th><th>操作</th></tr></thead><tbody>' +
+    $('keysTable').innerHTML = '<div class="table-scroll"><table class="keys-table"><thead><tr><th class="key-select-column"><label class="key-select" title="'+esc(t('全选密钥'))+'"><input type="checkbox" data-select-all-keys aria-label="'+esc(t('全选密钥'))+'"/><span class="key-select-ui" aria-hidden="true"></span></label></th><th>标签</th><th>可用模型</th><th>密钥限额</th><th>已用 / 剩余</th><th>绑定账户</th><th>状态</th><th>操作</th></tr></thead><tbody>' +
       state.keys.map(k => {
         const expired = parseExpiresAt(k.expires_at) && parseExpiresAt(k.expires_at).getTime() <= Date.now();
         const st = k.revoked_at
@@ -2542,6 +2544,7 @@
            '<td>'+modelChips(k.allowed_models, k.model_token_limits, k.unmatched_models_mode)+'</td>' +
           '<td>'+quotaBlock(k)+'</td>' +
           '<td><div class="spend-cell"><span class="primary">'+esc(money(k.settled_spend_micro_usd))+'</span><span class="secondary"><span>剩余</span> '+(Number(k.quota_micro_usd||0) <= 0 ? t('不限制') : esc(money(k.remaining_micro_usd)))+'</span></div></td>' +
+          '<td>'+authBindingsCell(k)+'</td>' +
           '<td>'+st+'</td>' +
           '<td><div class="row-actions">' +
             '<button class="btn soft sm" data-copy="'+esc(k.id)+'">'+uiIcon('copy')+esc(t('复制密钥'))+'</button>' +
@@ -2962,6 +2965,26 @@
     return Array.from($('keyModalAuthBindings').selectedOptions).map(option => {
       try { return JSON.parse(option.value); } catch (_) { return null; }
     }).filter(Boolean);
+  }
+
+  // Bindings are stored as (provider, auth_id); show the readable part of the
+  // account id and keep the full value in the title for disambiguation.
+  function keyAuthBindingName(binding) {
+    let id = String(binding && binding.auth_id || '').trim();
+    const provider = String(binding && binding.provider || '').trim();
+    if (provider && id.toLowerCase().startsWith(provider.toLowerCase() + '-')) id = id.slice(provider.length + 1);
+    return id || provider;
+  }
+
+  function authBindingsCell(k) {
+    const bindings = Array.isArray(k.auth_bindings) ? k.auth_bindings : [];
+    if (!bindings.length) {
+      return '<div class="key-bindings"><span class="key-bindings-none" title="'+esc(t('未绑定账号时由宿主调度选择账户'))+'">'+esc(t('不限制'))+'</span></div>';
+    }
+    return '<div class="key-bindings">' + bindings.map(binding => {
+      const full = [binding.provider, binding.auth_id].filter(Boolean).join(' · ');
+      return '<span class="key-binding-item" title="'+esc(full)+'">'+esc(keyAuthBindingName(binding))+'</span>';
+    }).join('') + '</div>';
   }
 
   function renderKeyAuthBindings(selected) {
@@ -5040,8 +5063,11 @@
       const reloadBtn = '<button type="button" class="btn sm ghost auth-quota-reload" data-provider="'+esc(authQuotaValue(item, 'provider') || '')+'" data-auth-id="'+esc(authQuotaValue(item, 'auth_id') || '')+'" data-auth-index="'+esc(authQuotaValue(item, 'auth_index') || '')+'" data-item-key="'+esc(itemKey)+'"'+(refreshing || warming ? ' disabled' : '')+' title="重新加载"><span class="auth-quota-reload-icon" aria-hidden="true">'+authQuotaIcon('refresh')+'</span><span>'+(refreshing ? '加载中' : '重新加载')+'</span></button>';
       const plan = authQuotaPlanName(authQuotaValue(item, 'plan'));
       const planLabel = plan ? '<span class="auth-quota-plan" title="订阅类型">'+esc(plan)+'</span>' : '';
+      // Host-provided account note (auth file "note"); omitted when unavailable.
+      const note = String(authQuotaValue(item, 'note') || '').trim();
+      const noteRow = note ? '<p class="auth-quota-note" title="'+esc(note)+'">'+esc(note)+'</p>' : '';
       const provider = String(authQuotaValue(item, 'provider') || '');
-      return '<article class="card auth-quota-card'+(refreshing ? ' is-refreshing' : '')+'" data-provider="'+esc(provider || 'unknown')+'"><header class="auth-quota-header"><div class="auth-quota-identity"><div class="auth-quota-identity-row"><div class="auth-quota-identity-main"><span class="auth-quota-provider-icon" aria-hidden="true">'+authQuotaProviderIcon(provider)+'</span><p class="auth-quota-provider'+(authQuotaProviderIsBrand(provider) ? '' : ' is-custom')+'" title="'+esc(provider || t('未知提供商'))+'">'+esc(authQuotaProviderName(provider))+'</p>'+planLabel+'</div><span class="badge '+badge.tone+'">'+esc(badge.text)+'</span></div><div class="auth-quota-account-row"><h2 class="auth-quota-title" title="'+esc(authQuotaValue(item, 'display_name') || t('未命名认证'))+'">'+esc(authQuotaValue(item, 'display_name') || t('未命名认证'))+'</h2><p class="auth-quota-sync" title="上次同步 '+esc(authQuotaTime(authQuotaValue(item, 'last_success_at')))+'"><span class="auth-quota-sync-icon" aria-hidden="true">'+authQuotaIcon('clock')+'</span><span>同步</span> '+esc(authQuotaShortTime(authQuotaValue(item, 'last_success_at')))+'</p></div>'+ (warmupStatus ? '<div class="auth-quota-warmup-row">'+warmupStatus+'</div>' : '') +'</div><div class="auth-quota-cost-grid"><div class="auth-quota-cost"><span>'+authQuotaIcon('coin')+esc(t('当前费用'))+'</span><strong title="'+esc(costs.used)+'">'+esc(costs.used)+'</strong></div><div class="auth-quota-cost"><span>'+authQuotaIcon('wallet')+esc(t('预估剩余'))+'</span><strong title="'+esc(costs.remaining)+'">'+esc(costs.remaining)+'</strong></div><div class="auth-quota-cost"><span>'+authQuotaIcon('trend')+esc(t('预计可用'))+'</span><strong title="'+esc(costs.available)+'">'+esc(costs.available)+'</strong></div>'+concurrentInput+'</div><div class="auth-quota-header-tools">'+weekSelect+'<div class="auth-quota-actions">'+warmupBtn+reloadBtn+'</div></div></header>'+(error ? '<div class="auth-quota-error">'+esc(error)+'</div>' : '')+'<div class="auth-quota-window-grid">'+cards+'</div></article>';
+      return '<article class="card auth-quota-card'+(refreshing ? ' is-refreshing' : '')+'" data-provider="'+esc(provider || 'unknown')+'"><header class="auth-quota-header"><div class="auth-quota-identity"><div class="auth-quota-identity-row"><div class="auth-quota-identity-main"><span class="auth-quota-provider-icon" aria-hidden="true">'+authQuotaProviderIcon(provider)+'</span><p class="auth-quota-provider'+(authQuotaProviderIsBrand(provider) ? '' : ' is-custom')+'" title="'+esc(provider || t('未知提供商'))+'">'+esc(authQuotaProviderName(provider))+'</p>'+planLabel+'</div><span class="badge '+badge.tone+'">'+esc(badge.text)+'</span></div><div class="auth-quota-account-row"><h2 class="auth-quota-title" title="'+esc(authQuotaValue(item, 'display_name') || t('未命名认证'))+'">'+esc(authQuotaValue(item, 'display_name') || t('未命名认证'))+'</h2><p class="auth-quota-sync" title="上次同步 '+esc(authQuotaTime(authQuotaValue(item, 'last_success_at')))+'"><span class="auth-quota-sync-icon" aria-hidden="true">'+authQuotaIcon('clock')+'</span><span>同步</span> '+esc(authQuotaShortTime(authQuotaValue(item, 'last_success_at')))+'</p></div>'+ (warmupStatus ? '<div class="auth-quota-warmup-row">'+warmupStatus+'</div>' : '') +'</div><div class="auth-quota-cost-grid"><div class="auth-quota-cost"><span>'+authQuotaIcon('coin')+esc(t('当前费用'))+'</span><strong title="'+esc(costs.used)+'">'+esc(costs.used)+'</strong></div><div class="auth-quota-cost"><span>'+authQuotaIcon('wallet')+esc(t('预估剩余'))+'</span><strong title="'+esc(costs.remaining)+'">'+esc(costs.remaining)+'</strong></div><div class="auth-quota-cost"><span>'+authQuotaIcon('trend')+esc(t('预计可用'))+'</span><strong title="'+esc(costs.available)+'">'+esc(costs.available)+'</strong></div>'+concurrentInput+'</div><div class="auth-quota-header-tools">'+weekSelect+'<div class="auth-quota-actions">'+warmupBtn+reloadBtn+'</div></div></header>'+(error ? '<div class="auth-quota-error">'+esc(error)+'</div>' : '')+'<div class="auth-quota-window-grid">'+cards+'</div>'+noteRow+'</article>';
     }).join('');
   }
   function authQuotaWarmupStatus(warmup) {

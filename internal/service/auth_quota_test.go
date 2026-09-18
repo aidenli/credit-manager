@@ -289,6 +289,36 @@ func TestAuthQuotaOverviewDoesNotFetchUpstream(t *testing.T) {
 	}
 }
 
+func TestAuthQuotaOverviewCarriesAccountNote(t *testing.T) {
+	s := quotaService(t)
+	src := &fakeQuotaSource{
+		files: []AuthQuotaFile{
+			{ID: "auth-a", AuthIndex: "idx-a", Provider: "codex", Note: "  璀璨  "},
+			{ID: "auth-b", AuthIndex: "idx-b", Provider: "codex"},
+		},
+		auth: quotaJSON("codex"),
+	}
+	s.SetAuthQuotaSource(src)
+	listed, err := s.AuthQuotaOverview(context.Background(), "", AuthQuotaFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Items) != 2 {
+		t.Fatalf("items=%#v", listed.Items)
+	}
+	notes := map[string]string{}
+	for _, row := range listed.Items {
+		notes[row.AuthID] = row.Note
+	}
+	// The note is trimmed and simply absent when the host does not provide one.
+	if notes["auth-a"] != "璀璨" {
+		t.Fatalf("note=%q", notes["auth-a"])
+	}
+	if notes["auth-b"] != "" {
+		t.Fatalf("missing note should stay empty, got %q", notes["auth-b"])
+	}
+}
+
 func TestMergeHistoricalQuotaWindowsKeepsPreviousWeek(t *testing.T) {
 	pastReset := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
 	pastStart := pastReset.Add(-7 * 24 * time.Hour)

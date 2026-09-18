@@ -32,6 +32,7 @@ type AuthQuotaFile struct {
 	Type      string    `json:"type"`
 	Email     string    `json:"email"`
 	Account   string    `json:"account"`
+	Note      string    `json:"note"`
 	Path      string    `json:"path"`
 	ModTime   time.Time `json:"mod_time"`
 }
@@ -79,6 +80,7 @@ type AuthQuotaOverviewItem struct {
 	LastErrorAt           *time.Time           `json:"last_error_at,omitempty"`
 	Error                 string               `json:"error,omitempty"`
 	Plan                  string               `json:"plan,omitempty"`
+	Note                  string               `json:"note,omitempty"`
 	ResetCredits          *float64             `json:"reset_credits,omitempty"`
 	MaxConcurrentRequests int64                `json:"max_concurrent_requests"`
 	ActiveRequests        int64                `json:"active_requests"`
@@ -464,7 +466,7 @@ func (s *Service) failedQuotaItem(ctx context.Context, item AuthQuotaOverviewIte
 	return item
 }
 func quotaItem(f AuthQuotaFile, p, id string) AuthQuotaOverviewItem {
-	return AuthQuotaOverviewItem{AuthID: id, AuthIndex: f.AuthIndex, Provider: p, DisplayName: first(f.Label, f.Email, f.Account, f.Name, id), Windows: []AuthQuotaWindow{}}
+	return AuthQuotaOverviewItem{AuthID: id, AuthIndex: f.AuthIndex, Provider: p, DisplayName: first(f.Label, f.Email, f.Account, f.Name, id), Note: strings.TrimSpace(f.Note), Windows: []AuthQuotaWindow{}}
 }
 func modTime(t time.Time) *time.Time {
 	if t.IsZero() {

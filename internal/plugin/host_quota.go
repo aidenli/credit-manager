@@ -62,7 +62,7 @@ func (hostAuthQuotaSource) ListAuthQuotaFiles(context.Context) ([]service.AuthQu
 	}
 	files := make([]service.AuthQuotaFile, 0, len(response.Files))
 	for _, entry := range response.Files {
-		files = append(files, service.AuthQuotaFile{ID: entry.ID, AuthIndex: entry.AuthIndex, Name: entry.Name, Label: entry.Label, Provider: entry.Provider, Type: entry.Type, Email: entry.Email, Account: entry.Account, ModTime: entry.ModTime})
+		files = append(files, service.AuthQuotaFile{ID: entry.ID, AuthIndex: entry.AuthIndex, Name: entry.Name, Label: entry.Label, Provider: entry.Provider, Type: entry.Type, Email: entry.Email, Account: entry.Account, Note: entry.Note, ModTime: entry.ModTime})
 	}
 	return files, nil
 }
