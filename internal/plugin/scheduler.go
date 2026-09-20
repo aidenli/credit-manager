@@ -25,7 +25,7 @@ func pickAuth(raw []byte) ([]byte, error) {
 		if id == "" {
 			continue
 		}
-		candidates = append(candidates, service.AuthPickCandidate{ID: id, Provider: candidate.Provider})
+		candidates = append(candidates, service.AuthPickCandidate{ID: id, Provider: candidate.Provider, Status: candidate.Status})
 	}
 	if authID, handled, err := warmupTarget(req.Options.Headers, candidates); handled {
 		if err != nil {

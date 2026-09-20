@@ -170,3 +170,94 @@ func TestPickAuthForKeyRotatesEachKeyIndependently(t *testing.T) {
 		}
 	}
 }
+
+// An account the host has marked error/disabled must never be selected, even
+// though it is still in the candidate list: the status is a snapshot and the
+// account can go bad between list construction and the pick.
+func TestPickAuthForKeySkipsHostMarkedBadAccounts(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name   string
+		status string
+	}{
+		{"error", "error"},
+		{"disabled", "disabled"},
+		{"error with odd casing", "  ERROR "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := quotaService(t)
+			key, headers := boundKey(t, s, "bad-status")
+			if err := s.Store().ReplaceKeyAuthBindings(ctx, key.ID, []store.KeyAuthBinding{
+				{Provider: "codex", AuthID: "account-1"},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			_, handled, err := s.PickAuthForKey(ctx, headers, []AuthPickCandidate{
+				{ID: "account-1", Provider: "codex", Status: tc.status},
+			}, "gpt-5")
+			if !handled || !errors.Is(err, ErrNoBoundAuthAvailable) {
+				t.Fatalf("status %q must fail closed, got handled=%t err=%v", tc.status, handled, err)
+			}
+		})
+	}
+}
+
+// A bad account must be passed over for a healthy sibling in the same binding.
+func TestPickAuthForKeyPrefersHealthyBoundAccount(t *testing.T) {
+	s := quotaService(t)
+	ctx := context.Background()
+	key, headers := boundKey(t, s, "mixed-status")
+	if err := s.Store().ReplaceKeyAuthBindings(ctx, key.ID, []store.KeyAuthBinding{
+		{Provider: "codex", AuthID: "account-1"},
+		{Provider: "codex", AuthID: "account-2"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	candidates := []AuthPickCandidate{
+		{ID: "account-1", Provider: "codex", Status: "error"},
+		{ID: "account-2", Provider: "codex", Status: "active"},
+	}
+	for i := 0; i < 3; i++ {
+		id, handled, err := s.PickAuthForKey(ctx, headers, candidates, "gpt-5")
+		if err != nil || !handled || id != "account-2" {
+			t.Fatalf("pick %d = (%q, %t, %v), want account-2", i, id, handled, err)
+		}
+	}
+}
+
+// Only the terminal bad states are rejected: transient and unknown statuses must
+// stay usable, otherwise a host that adds a new status value would break routing.
+func TestPickAuthForKeyAcceptsNonTerminalStatuses(t *testing.T) {
+	for _, status := range []string{"", "active", "pending", "refreshing", "unknown", "some-future-state"} {
+		t.Run("status="+status, func(t *testing.T) {
+			s := quotaService(t)
+			ctx := context.Background()
+			key, headers := boundKey(t, s, "ok-status")
+			if err := s.Store().ReplaceKeyAuthBindings(ctx, key.ID, []store.KeyAuthBinding{
+				{Provider: "codex", AuthID: "account-1"},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			id, handled, err := s.PickAuthForKey(ctx, headers, []AuthPickCandidate{
+				{ID: "account-1", Provider: "codex", Status: status},
+			}, "gpt-5")
+			if err != nil || !handled || id != "account-1" {
+				t.Fatalf("status %q must stay usable, got (%q, %t, %v)", status, id, handled, err)
+			}
+		})
+	}
+}
+
+func TestAuthStatusUnusable(t *testing.T) {
+	for _, status := range []string{"error", "disabled", " ERROR ", "Disabled"} {
+		if !authStatusUnusable(status) {
+			t.Fatalf("status %q should be unusable", status)
+		}
+	}
+	for _, status := range []string{"", "active", "pending", "refreshing", "unknown", "mystery"} {
+		if authStatusUnusable(status) {
+			t.Fatalf("status %q should stay usable", status)
+		}
+	}
+}

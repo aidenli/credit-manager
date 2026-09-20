@@ -16,6 +16,22 @@ import (
 type AuthPickCandidate struct {
 	ID       string
 	Provider string
+	// Status is the host-visible lifecycle state (unknown, active, pending,
+	// refreshing, error, disabled).
+	Status string
+}
+
+// authStatusUnusable reports whether the host has already declared this account
+// unfit to serve requests. Only the terminal bad states are rejected: pending and
+// refreshing are transient, and an unrecognised or empty status stays usable
+// because the host filters unusable accounts out before offering candidates.
+func authStatusUnusable(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "error", "disabled":
+		return true
+	default:
+		return false
+	}
 }
 
 // ErrNoBoundAuthAvailable fails closed when a key binds OAuth accounts but none
@@ -219,6 +235,11 @@ func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candi
 			continue
 		}
 		if _, ok := bound[provider+"\x00"+id]; !ok {
+			continue
+		}
+		// The host's status is a snapshot taken when the candidate list was built;
+		// the account can go bad before we pick, so re-check it here.
+		if authStatusUnusable(candidate.Status) {
 			continue
 		}
 		scoped = append(scoped, candidate)
