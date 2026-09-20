@@ -3,6 +3,7 @@ package management
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/yuluo688/credit-manager/internal/service"
 	"github.com/yuluo688/credit-manager/internal/store"
@@ -10,8 +11,28 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-func getOverview(ctx context.Context, svc *service.Service, query map[string][]string) (pluginapi.ManagementResponse, error) {
-	filter, err := usageFilterFromQuery(query, 500)
+// markUsedAuthsDisabled applies the host switch to ledger identities. A row is
+// matched on whichever identifier the ledger kept: auth_id normally, auth_index
+// for older rows that never captured one. Identities the host does not know
+// (accounts that were removed) keep Disabled=false, i.e. they are not claimed to
+// be switched off.
+func markUsedAuthsDisabled(used []store.UsageAuthSummary, disabled map[string]bool) {
+	for i := range used {
+		item := &used[i]
+		for _, id := range []string{item.AuthID, item.AuthIndex} {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			if isDisabled, ok := disabled[id]; ok {
+				item.Disabled = isDisabled
+				break
+			}
+		}
+	}
+}
+
+func getOverview(ctx context.Context, svc *service.Service, query map[string][]string) (pluginapi.ManagementResponse, error) {	filter, err := usageFilterFromQuery(query, 500)
 	if err != nil {
 		return jsonErr(http.StatusBadRequest, err.Error()), nil
 	}
@@ -38,6 +59,11 @@ func getOverview(ctx context.Context, svc *service.Service, query map[string][]s
 	usedAuths, err := svc.Store().ListUsedAuths(ctx)
 	if err != nil {
 		return jsonErr(http.StatusInternalServerError, err.Error()), nil
+	}
+	// Mark which accounts are currently switched on so the console can show them
+	// first. Best-effort: on failure the flag stays false and nothing is claimed.
+	if disabled, disabledErr := svc.AuthFileDisabled(ctx); disabledErr == nil {
+		markUsedAuthsDisabled(usedAuths, disabled)
 	}
 	recent, err := svc.Store().ListUsage(ctx, filter)
 	if err != nil {

@@ -418,6 +418,9 @@ type UsageAuthSummary struct {
 	Name      string `json:"auth_name"`
 	Label     string `json:"auth_label"`
 	Email     string `json:"auth_email"`
+	// Disabled mirrors the host's switch for this account. It is resolved by the
+	// management layer, not stored in the ledger.
+	Disabled bool `json:"disabled"`
 }
 
 func usageReportedTotalSQL(prefix string) string {

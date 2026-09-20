@@ -16,21 +16,40 @@ import (
 )
 
 type fakeQuotaSource struct {
-	files      []AuthQuotaFile
-	auth       string
-	auths      map[string]string
-	responses  map[string]string
-	requests   []AuthQuotaHTTPRequest
-	gets       int
-	got        []string
-	fail       bool
-	failHTTP   bool
-	status     int
-	statusBody string
+	files         []AuthQuotaFile
+	auth          string
+	auths         map[string]string
+	responses     map[string]string
+	requests      []AuthQuotaHTTPRequest
+	gets          int
+	got           []string
+	fail          bool
+	failHTTP      bool
+	status        int
+	statusBody    string
+	disabledAuths map[string]bool
 }
 
 func (f *fakeQuotaSource) ListAuthQuotaFiles(context.Context) ([]AuthQuotaFile, error) {
 	return f.files, nil
+}
+func (f *fakeQuotaSource) AuthFileDisabled(context.Context) (map[string]bool, error) {
+	if f.fail {
+		return nil, errors.New("host failed")
+	}
+	// Default: every listed file reflects its own Disabled flag.
+	out := make(map[string]bool, len(f.files)*2)
+	for _, file := range f.files {
+		for _, candidate := range []string{file.ID, file.AuthIndex} {
+			if candidate != "" {
+				out[candidate] = file.Disabled
+			}
+		}
+	}
+	for id, disabled := range f.disabledAuths {
+		out[id] = disabled
+	}
+	return out, nil
 }
 func (f *fakeQuotaSource) GetAuthQuotaJSON(_ context.Context, authIndex string) ([]byte, error) {
 	f.gets++

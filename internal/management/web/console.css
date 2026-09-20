@@ -209,6 +209,10 @@ input:focus, select:focus, textarea:focus { border-color:#76d7b8; background:#ff
 .key-search-option:hover, .key-search-option:focus-visible { border:0; background:#eff9f4; color:#087d5a; box-shadow:none; }
 .key-search-option .key-search-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.84rem; font-weight:650; }
 .key-search-option.revoked .key-search-label::after { content:"已删除"; display:inline-block; margin-left:7px; padding:1px 5px; border:1px solid #f1d3cf; border-radius:999px; background:#fff6f4; color:#bd443b; font-size:.66rem; font-weight:650; vertical-align:1px; }
+/* Host switch state for the account filter: enabled accounts are listed first. */
+.key-search-option.is-on .key-search-label::after { content:"启用中"; display:inline-block; margin-left:7px; padding:1px 5px; border:1px solid #bfe6d3; border-radius:999px; background:#eefaf3; color:#0f7a56; font-size:.66rem; font-weight:650; vertical-align:1px; }
+.key-search-option.is-off { opacity:.72; }
+.key-search-option.is-off .key-search-label::after { content:"已停用"; display:inline-block; margin-left:7px; padding:1px 5px; border:1px solid #e3ded4; border-radius:999px; background:#f6f4f0; color:#8b8378; font-size:.66rem; font-weight:650; vertical-align:1px; }
 .key-search-empty { padding:12px 10px; color:var(--muted); font-size:.8rem; text-align:center; }
 .custom-date-panel { width:312px; padding:14px; border-color:#cfe7da; border-radius:14px; background:linear-gradient(180deg, #fff, #fbfdfb); box-shadow:0 20px 44px rgba(29, 49, 37, .17), 0 4px 12px rgba(29, 49, 37, .06); }
 .custom-date-header, .custom-date-footer, .custom-date-time { display:flex; align-items:center; justify-content:space-between; gap:8px; }

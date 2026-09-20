@@ -33,6 +33,7 @@ type AuthQuotaFile struct {
 	Email     string    `json:"email"`
 	Account   string    `json:"account"`
 	Note      string    `json:"note"`
+	Disabled  bool      `json:"disabled"`
 	Path      string    `json:"path"`
 	ModTime   time.Time `json:"mod_time"`
 }
@@ -51,6 +52,9 @@ type AuthQuotaSource interface {
 	ListAuthQuotaFiles(context.Context) ([]AuthQuotaFile, error)
 	GetAuthQuotaJSON(context.Context, string) ([]byte, error)
 	DoAuthQuotaHTTP(context.Context, string, AuthQuotaHTTPRequest) (AuthQuotaHTTPResponse, error)
+	// AuthFileDisabled reports per host auth identifier whether the account is
+	// currently disabled, so management can mark which accounts are switched on.
+	AuthFileDisabled(context.Context) (map[string]bool, error)
 }
 
 type AuthQuotaFilter struct {
@@ -135,6 +139,16 @@ func (s *Service) authQuotaSourceValue() AuthQuotaSource {
 	s.authQuotaMu.RLock()
 	defer s.authQuotaMu.RUnlock()
 	return s.authQuotaSource
+}
+
+// AuthFileDisabled reports the host's disabled flag per auth identifier.
+// Best-effort: an error means the state is unknown, not that accounts are off.
+func (s *Service) AuthFileDisabled(ctx context.Context) (map[string]bool, error) {
+	source := s.authQuotaSourceValue()
+	if source == nil {
+		return nil, errors.New("auth quota source unavailable")
+	}
+	return source.AuthFileDisabled(ctx)
 }
 func (s *Service) AuthQuotaOverview(ctx context.Context, callback string, filter AuthQuotaFilter) (AuthQuotaOverview, error) {
 	// Listing is cache-only so opening the console does not query every

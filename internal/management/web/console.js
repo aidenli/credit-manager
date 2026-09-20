@@ -2803,10 +2803,26 @@
       authFilterValue(auth, 'auth_id'), authFilterValue(auth, 'auth_index')].join('\t');
   }
 
+  // Accounts whose host switch is off are still selectable (their history is
+  // real), but enabled accounts are listed first so the usual choices are on top.
+  // Read the raw field: authFilterValue stringifies, which would turn false into
+  // a truthy "false".
+  function authFilterDisabled(auth) {
+    if (!auth) return false;
+    const raw = auth.disabled != null ? auth.disabled : auth.Disabled;
+    return raw === true || raw === 'true' || raw === 1 || raw === '1';
+  }
+
+  function authFilterCompare(left, right) {
+    const byDisabled = Number(authFilterDisabled(left)) - Number(authFilterDisabled(right));
+    if (byDisabled !== 0) return byDisabled;
+    return authFilterLabel(left).localeCompare(authFilterLabel(right));
+  }
+
   function authSearchMatches(query) {
     query = String(query || '').trim().toLocaleLowerCase();
     const items = state.usedAuths || [];
-    if (!query) return items;
+    if (!query) return items.slice().sort(authFilterCompare);
     return items.filter(auth => {
       const haystack = [
         authFilterLabel(auth),
@@ -2818,7 +2834,7 @@
         authFilterValue(auth, 'auth_name') || authFilterValue(auth, 'name'),
       ].join(' ').toLocaleLowerCase();
       return haystack.includes(query);
-    });
+    }).sort(authFilterCompare);
   }
 
   function renderAuthSearchOptions(kind) {
@@ -2826,11 +2842,14 @@
     const panel = $(kind + 'AuthOptions');
     if (!input || !panel) return;
     const matches = authSearchMatches(input.value);
-    panel.innerHTML = matches.length ? matches.map((auth, index) =>
-      '<button class="key-search-option" type="button" data-auth-pos="'+index+'" title="'+esc(authFilterValue(auth, 'auth_id') || authFilterValue(auth, 'auth_index'))+'">' +
+    panel.innerHTML = matches.length ? matches.map((auth, index) => {
+      // The state tag follows the existing .revoked pattern: the label is a
+      // flex item with overflow:hidden, so an appended badge would be clipped.
+      const stateClass = authFilterDisabled(auth) ? ' is-off' : ' is-on';
+      return '<button class="key-search-option'+stateClass+'" type="button" data-auth-pos="'+index+'" title="'+esc(authFilterValue(auth, 'auth_id') || authFilterValue(auth, 'auth_index'))+'">' +
         '<span class="key-search-label">'+esc(authFilterLabel(auth))+'</span>' +
-      '</button>'
-    ).join('') : '<div class="key-search-empty">未找到匹配的账号</div>';
+      '</button>';
+    }).join('') : '<div class="key-search-empty">未找到匹配的账号</div>';
     panel.querySelectorAll('[data-auth-pos]').forEach(button => button.addEventListener('mousedown', event => {
       event.preventDefault();
       const auth = matches[Number(button.dataset.authPos)];
