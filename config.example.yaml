@@ -33,3 +33,16 @@ settlement:
 stream:
   max_buffer_bytes: 4194304
   stale_reservation_timeout: 2h
+
+# 绑定 Key 的会话黏性（默认关闭，保持按请求轮询）。
+# 开启后，同一会话在 TTL 内固定使用同一个已绑定账号，提升 prompt cache 命中率、降低首字延迟；
+# 只会在这个 Key 自己的绑定账户中选择，仍然是访问隔离边界，不会用到未绑定账号。
+# 会话标识取自请求头，优先级与宿主 routing.session-affinity 一致：
+#   X-Claude-Code-Session-Id > Session-Id / Session_id > X-Session-ID > X-Session-Affinity > X-Client-Request-Id
+# 缺少会话标识、或该 Key 只有 1 个可用绑定账号时，行为与关闭时完全相同。
+# 绑定账号不可用（并发上限、warmup 占用、被移出候选）时会自动重新选择并重新绑定，不会卡死。
+# 与宿主 routing.session-affinity 的关系：绑定 Key 由插件决定账号，宿主的会话黏性不参与，
+# 因此需要亲和时请在插件这里开启，宿主侧开不开都不影响绑定 Key。
+session_affinity:
+  enabled: false
+  ttl: 1h

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/yuluo688/credit-manager/internal/keys"
 	"github.com/yuluo688/credit-manager/internal/store"
@@ -177,7 +178,11 @@ func (s *Service) PickAuth(ctx context.Context, candidates []AuthPickCandidate) 
 // PickAuthForKey routes one scheduler decision for the key behind the request.
 // Keys without bindings keep the unbound behaviour unchanged. Bound keys may
 // only use their own accounts and fail closed when none of them is available.
-func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candidates []AuthPickCandidate) (authID string, handled bool, err error) {
+//
+// model only participates in the session-affinity binding key (mirroring the
+// host's provider::session::model cache key); selection itself is model-agnostic
+// because the host has already filtered candidates by model.
+func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candidates []AuthPickCandidate, model string) (authID string, handled bool, err error) {
 	if s == nil {
 		return "", false, nil
 	}
@@ -233,7 +238,13 @@ func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candi
 		return "", true, ErrNoBoundAuthAvailable
 	}
 	// Bound keys keep their own cursor so one key cannot skew another key's rotation.
-	chosen := s.nextAuthPickLocked(key.ID+"\x00"+authLimitProvider(available[0].Provider), available)
+	// With session affinity enabled the session, not the key, decides the account.
+	provider := authLimitProvider(available[0].Provider)
+	sessionID := ""
+	if s.sessionAffinityEnabled() {
+		sessionID = sessionAffinityID(headers)
+	}
+	chosen := s.chooseBoundAuthLocked(key.ID+"\x00"+provider, provider, sessionID, strings.TrimSpace(model), available, time.Now())
 	s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: strings.TrimSpace(chosen.ID), Provider: chosen.Provider})
 	return strings.TrimSpace(chosen.ID), true, nil
 }
@@ -326,14 +337,25 @@ func (s *Service) bindOldestUnattributedLocked(auth store.AuthIdentity) {
 	oldest.hasAuth = true
 }
 
-// nextAuthPickLocked round-robins inside one cursor scope. An empty scope keeps
-// the shared provider-wide cursor; bound keys pass their own scope.
+// authPickScopeAffinity is a cursor-scope sentinel used by the session-affinity
+// path. It deliberately resolves to one shared cursor instead of a per-key one:
+// sessions are bound on their first pick, so the first pick of each session is
+// what spreads sessions across accounts.
+const authPickScopeAffinity = "\x00affinity"
+
+// nextAuthPickLocked round-robins inside one cursor scope.
+//
+// An empty scope keeps the previous semantics: the provider-wide cursor, which
+// callers that already scoped by key pass explicitly.
 func (s *Service) nextAuthPickLocked(scope string, available []AuthPickCandidate) AuthPickCandidate {
 	if s.authPickCursor == nil {
 		s.authPickCursor = map[string]int{}
 	}
 	key := scope
-	if key == "" {
+	switch key {
+	case authPickScopeAffinity:
+		key = "auth"
+	case "":
 		key = authLimitProvider(available[0].Provider)
 	}
 	if key == "" {

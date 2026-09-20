@@ -33,7 +33,7 @@ func pickAuth(raw []byte) ([]byte, error) {
 		}
 		return okEnvelope(pluginapi.SchedulerPickResponse{AuthID: authID, Handled: true})
 	}
-	authID, handled, err := svc.PickAuthForKey(context.Background(), req.Options.Headers, candidates)
+	authID, handled, err := svc.PickAuthForKey(context.Background(), req.Options.Headers, candidates, req.Model)
 	if err != nil {
 		return errorEnvelope(authPickErrorCode(err), err.Error()), nil
 	}

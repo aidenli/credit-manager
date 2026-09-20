@@ -86,6 +86,14 @@ type KeyConfig struct {
 // config is empty or does not set config_file.
 const ConfigFileEnv = "CREDIT_MANAGER_CONFIG_FILE"
 
+// SessionAffinityConfig keeps a session on the same bound OAuth account for a
+// while, mirroring the host's routing.session-affinity. Disabled by default so
+// existing deployments keep pure per-request rotation.
+type SessionAffinityConfig struct {
+	Enabled bool          `yaml:"enabled" json:"enabled"`
+	TTL     time.Duration `yaml:"ttl" json:"ttl"`
+}
+
 // Config is the plugin YAML configuration loaded by the host and/or config_file.
 type Config struct {
 	// ConfigFile optionally points to an external YAML file. Host config can be
@@ -95,13 +103,14 @@ type Config struct {
 	// DataDir is the plugin-managed directory for SQLite and lock files.
 	DataDir string `yaml:"data_dir" json:"data_dir"`
 	// DatabaseFile is the SQLite filename under DataDir. Defaults to credit-manager.db.
-	DatabaseFile string           `yaml:"database_file,omitempty" json:"database_file,omitempty"`
-	BusyTimeout  time.Duration    `yaml:"busy_timeout" json:"busy_timeout"`
-	Keys         KeyConfig        `yaml:"keys" json:"keys"`
-	Limits       RequestLimits    `yaml:"limits" json:"limits"`
-	Pricing      PricingConfig    `yaml:"pricing" json:"pricing"`
-	Settlement   SettlementConfig `yaml:"settlement" json:"settlement"`
-	Stream       StreamConfig     `yaml:"stream" json:"stream"`
+	DatabaseFile    string                `yaml:"database_file,omitempty" json:"database_file,omitempty"`
+	BusyTimeout     time.Duration         `yaml:"busy_timeout" json:"busy_timeout"`
+	Keys            KeyConfig             `yaml:"keys" json:"keys"`
+	Limits          RequestLimits         `yaml:"limits" json:"limits"`
+	Pricing         PricingConfig         `yaml:"pricing" json:"pricing"`
+	Settlement      SettlementConfig      `yaml:"settlement" json:"settlement"`
+	Stream          StreamConfig          `yaml:"stream" json:"stream"`
+	SessionAffinity SessionAffinityConfig `yaml:"session_affinity" json:"session_affinity"`
 }
 
 func Default() Config {
@@ -129,6 +138,11 @@ func Default() Config {
 		Stream: StreamConfig{
 			MaxBufferBytes:          4 << 20,
 			StaleReservationTimeout: 2 * time.Hour,
+		},
+		// Off by default: per-request rotation is the existing behaviour.
+		SessionAffinity: SessionAffinityConfig{
+			Enabled: false,
+			TTL:     time.Hour,
 		},
 	}
 }
@@ -248,6 +262,10 @@ func (c Config) Validate() error {
 	}
 	if c.Stream.StaleReservationTimeout < time.Minute || c.Stream.StaleReservationTimeout > 24*time.Hour {
 		errs = append(errs, errors.New("stream.stale_reservation_timeout must be between 1 minute and 24 hours"))
+	}
+	// TTL is only meaningful when enabled, but a bad value is still a config error.
+	if c.SessionAffinity.TTL <= 0 || c.SessionAffinity.TTL > 7*24*time.Hour {
+		errs = append(errs, errors.New("session_affinity.ttl must be greater than zero and at most 7 days"))
 	}
 
 	switch c.Pricing.UnknownPolicy {

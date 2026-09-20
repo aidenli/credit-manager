@@ -37,7 +37,7 @@ func TestPickAuthForKeyRestrictsToBoundAccounts(t *testing.T) {
 		{ID: "account-3", Provider: "codex"},
 	}
 	for i := 0; i < 3; i++ {
-		id, handled, err := s.PickAuthForKey(ctx, headers, candidates)
+		id, handled, err := s.PickAuthForKey(ctx, headers, candidates, "gpt-5")
 		if err != nil || !handled || id != "account-2" {
 			t.Fatalf("bound pick %d = (%q, %t, %v)", i, id, handled, err)
 		}
@@ -52,7 +52,7 @@ func TestPickAuthForKeyFailsClosedWhenNoBoundAccountIsUsable(t *testing.T) {
 	if err := s.Store().ReplaceKeyAuthBindings(ctx, missing.ID, []store.KeyAuthBinding{{Provider: "codex", AuthID: "account-9"}}); err != nil {
 		t.Fatal(err)
 	}
-	id, handled, err := s.PickAuthForKey(ctx, missingHeaders, []AuthPickCandidate{{ID: "account-1", Provider: "codex"}})
+	id, handled, err := s.PickAuthForKey(ctx, missingHeaders, []AuthPickCandidate{{ID: "account-1", Provider: "codex"}}, "gpt-5")
 	if !handled || id != "" || !errors.Is(err, ErrNoBoundAuthAvailable) {
 		t.Fatalf("unlisted bound pick = (%q, %t, %v)", id, handled, err)
 	}
@@ -72,7 +72,7 @@ func TestPickAuthForKeyFailsClosedWhenNoBoundAccountIsUsable(t *testing.T) {
 	_, handled, err = s.PickAuthForKey(ctx, busyHeaders, []AuthPickCandidate{
 		{ID: "account-1", Provider: "codex"},
 		{ID: "account-2", Provider: "codex"},
-	})
+	}, "gpt-5")
 	if !handled || !errors.Is(err, ErrNoBoundAuthAvailable) {
 		t.Fatalf("busy bound pick = handled:%t err:%v", handled, err)
 	}
@@ -83,7 +83,7 @@ func TestPickAuthForKeyKeepsUnboundBehaviour(t *testing.T) {
 	ctx := context.Background()
 	_, headers := boundKey(t, s, "unbound")
 	candidates := []AuthPickCandidate{{ID: "account-1", Provider: "codex"}, {ID: "account-2", Provider: "codex"}}
-	if id, handled, err := s.PickAuthForKey(ctx, headers, candidates); err != nil || handled || id != "" {
+	if id, handled, err := s.PickAuthForKey(ctx, headers, candidates, "gpt-5"); err != nil || handled || id != "" {
 		t.Fatalf("unlimited unbound pick = (%q, %t, %v)", id, handled, err)
 	}
 	if err := s.Store().UpsertAuthConcurrencyLimit(ctx, "codex", "account-1", 1); err != nil {
@@ -93,7 +93,7 @@ func TestPickAuthForKeyKeepsUnboundBehaviour(t *testing.T) {
 	if err := s.AdmitAuth(ctx, "res-unbound", store.AuthIdentity{AuthID: "account-1", Provider: "codex"}); err != nil {
 		t.Fatal(err)
 	}
-	id, handled, err := s.PickAuthForKey(ctx, headers, candidates)
+	id, handled, err := s.PickAuthForKey(ctx, headers, candidates, "gpt-5")
 	if err != nil || !handled || id != "account-2" {
 		t.Fatalf("limited unbound pick = (%q, %t, %v)", id, handled, err)
 	}
@@ -116,7 +116,7 @@ func TestPickAuthForKeyConcurrentRotationIsSafe(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			id, handled, err := s.PickAuthForKey(ctx, headers, candidates)
+			id, handled, err := s.PickAuthForKey(ctx, headers, candidates, "gpt-5")
 			if err != nil || !handled {
 				errs <- err
 				return
@@ -158,7 +158,7 @@ func TestPickAuthForKeyRotatesEachKeyIndependently(t *testing.T) {
 	}{{"first", firstHeaders}, {"second", secondHeaders}} {
 		var picked []string
 		for i := 0; i < 2; i++ {
-			id, handled, err := s.PickAuthForKey(ctx, tc.headers, candidates)
+			id, handled, err := s.PickAuthForKey(ctx, tc.headers, candidates, "gpt-5")
 			if err != nil || !handled {
 				t.Fatalf("%s pick %d = (%q, %t, %v)", tc.name, i, id, handled, err)
 			}
