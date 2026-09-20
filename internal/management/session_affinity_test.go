@@ -159,4 +159,11 @@ func TestConsoleExposesSessionAffinityToggle(t *testing.T) {
 	if idxQuotas < 0 || idxToggle < idxQuotas {
 		t.Fatal("session affinity toggle is not inside the auth-quotas tab")
 	}
+	// It is a toolbar sibling, not a member of the filter group: the filter row
+	// is narrower than the switch and previously clipped its label.
+	idxFilters := strings.Index(page, `class="auth-quota-toolbar-filters"`)
+	idxFiltersEnd := strings.Index(page[idxFilters:], "</div>")
+	if idxFilters >= 0 && idxFiltersEnd >= 0 && idxToggle < idxFilters+idxFiltersEnd {
+		t.Fatal("session affinity switch must not be nested inside the filter group")
+	}
 }

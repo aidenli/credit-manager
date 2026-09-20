@@ -5477,6 +5477,24 @@
     }
     return items.map(item => ({ provider: authQuotaValue(item, 'provider'), auth_id: authQuotaValue(item, 'auth_id'), auth_index: authQuotaValue(item, 'auth_index'), label: authQuotaValue(item, 'display_name') }));
   }
+  // Compact duration for the toolbar ("1h0m0s" -> "1h", "30m0s" -> "30m").
+  // The full value stays in the tooltip.
+  function compactDuration(value) {
+    const raw = String(value == null ? '' : value).trim();
+    if (!raw) return '';
+    if (raw.includes('d')) return raw;
+    const hours = /^(\d+)h/.exec(raw);
+    if (hours) {
+      const minutes = /(\d+)m/.exec(raw.replace(/^\d+h/, ''));
+      return minutes && Number(minutes[1]) > 0 ? hours[1] + 'h' + minutes[1] + 'm' : hours[1] + 'h';
+    }
+    const minutesOnly = /^(\d+)m/.exec(raw);
+    if (minutesOnly) return minutesOnly[1] + 'm';
+    const seconds = /^(\d+)s/.exec(raw);
+    if (seconds) return seconds[1] + 's';
+    return raw;
+  }
+
   // Session affinity for bound keys. Global toggle; applies to the next request
   // without a host restart because the plugin reads it from the database.
   function applySessionAffinitySettings(settings) {
@@ -5486,11 +5504,16 @@
       toggle.checked = enabled;
       toggle.disabled = false;
     }
+    const rawTTL = String((settings && settings.ttl) || '').trim();
+    const ttl = compactDuration(rawTTL);
     const stateEl = $('authSessionAffinityState');
     if (stateEl) {
       stateEl.textContent = enabled
-        ? t('已开启') + ' · ' + t('TTL') + ' ' + String((settings && settings.ttl) || '')
+        ? t('已开启') + (ttl ? ' · ' + ttl : '')
         : t('已关闭');
+      stateEl.title = enabled
+        ? t('会话黏性已开启') + (rawTTL ? ' · ' + t('TTL') + ' ' + rawTTL : '')
+        : t('会话黏性已关闭');
       stateEl.classList.toggle('is-on', enabled);
     }
   }
