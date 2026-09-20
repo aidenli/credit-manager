@@ -1512,6 +1512,7 @@
       return;
     }
     if (tab === 'auth-quotas') {
+      loadSessionAffinitySettings().catch(() => {});
       await loadAuthQuotas();
       return;
     }
@@ -5457,6 +5458,53 @@
     }
     return items.map(item => ({ provider: authQuotaValue(item, 'provider'), auth_id: authQuotaValue(item, 'auth_id'), auth_index: authQuotaValue(item, 'auth_index'), label: authQuotaValue(item, 'display_name') }));
   }
+  // Session affinity for bound keys. Global toggle; applies to the next request
+  // without a host restart because the plugin reads it from the database.
+  function applySessionAffinitySettings(settings) {
+    const enabled = !!(settings && settings.enabled);
+    const toggle = $('authSessionAffinityEnabled');
+    if (toggle) {
+      toggle.checked = enabled;
+      toggle.disabled = false;
+    }
+    const stateEl = $('authSessionAffinityState');
+    if (stateEl) {
+      stateEl.textContent = enabled
+        ? t('已开启') + ' · ' + t('TTL') + ' ' + String((settings && settings.ttl) || '')
+        : t('已关闭');
+      stateEl.classList.toggle('is-on', enabled);
+    }
+  }
+
+  async function loadSessionAffinitySettings() {
+    const stateEl = $('authSessionAffinityState');
+    if (stateEl) stateEl.textContent = '读取中…';
+    try {
+      applySessionAffinitySettings(await api('GET', 'credit-manager/auth-quotas/session-affinity'));
+    } catch (e) {
+      const toggle = $('authSessionAffinityEnabled');
+      if (toggle) toggle.disabled = true;
+      if (stateEl) stateEl.textContent = '读取失败：' + e.message;
+    }
+  }
+
+  async function saveSessionAffinitySettings(enabled) {
+    const toggle = $('authSessionAffinityEnabled');
+    const stateEl = $('authSessionAffinityState');
+    if (toggle) toggle.disabled = true;
+    if (stateEl) stateEl.textContent = '保存中…';
+    try {
+      applySessionAffinitySettings(await api('POST', 'credit-manager/auth-quotas/session-affinity', { enabled }));
+      flash(enabled ? '会话黏性已开启' : '会话黏性已关闭', true);
+    } catch (e) {
+      if (toggle) toggle.checked = !enabled;
+      if (stateEl) stateEl.textContent = '保存失败：' + e.message;
+      flash('会话黏性设置保存失败：' + e.message, false);
+    } finally {
+      if (toggle) toggle.disabled = false;
+    }
+  }
+
   function closeAuthWarmupSettings(force) {
     if (state.authWarmupSettingsSaving && !force) return;
     const modal = $('authWarmupSettingsModal');
@@ -5866,6 +5914,9 @@
   });
   $('btnAuthWarmupSettings').addEventListener('click', () => {
     openAuthWarmupSettings().catch(e => flash(e.message, false));
+  });
+  $('authSessionAffinityEnabled').addEventListener('change', event => {
+    saveSessionAffinitySettings(event.target.checked).catch(e => flash(e.message, false));
   });
   $('btnCloseAuthWarmupSettings').addEventListener('click', closeAuthWarmupSettings);
   $('btnCancelAuthWarmupSettings').addEventListener('click', closeAuthWarmupSettings);

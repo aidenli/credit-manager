@@ -17,7 +17,7 @@ import (
 const (
 	PluginID      = "credit-manager"
 	PluginName    = "CPA Credit Manager"
-	PluginVersion = "1.8.4"
+	PluginVersion = "1.8.5"
 	// CallerScopeMetadataKey mirrors sdk/cliproxy/executor.CallerScopeMetadataKey.
 	CallerScopeMetadataKey = "caller_scope"
 )
@@ -47,10 +47,14 @@ type Service struct {
 	// sessionAffinity maps a session key to the bound account so a session keeps
 	// hitting the same OAuth account. Guarded by authMu (shared across
 	// reconfigure), like authPickCursor.
-	sessionAffinity  map[string]sessionBinding
-	directorySyncer  ModelDirectorySyncer
-	directoryIDsMu   sync.Mutex
-	lastDirectoryIDs []string
+	sessionAffinity map[string]sessionBinding
+	// sessionAffinityState caches the effective toggle for the hot path; the
+	// mutex only guards the one-time/miss load from the database.
+	sessionAffinityState   atomic.Pointer[sessionAffinityState]
+	sessionAffinityStateMu sync.Mutex
+	directorySyncer        ModelDirectorySyncer
+	directoryIDsMu         sync.Mutex
+	lastDirectoryIDs       []string
 }
 
 // authMutex is copy-safe because it shares its underlying lock. A same-store

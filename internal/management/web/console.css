@@ -1019,6 +1019,14 @@ html[data-palette="dark"] .overview-guide { background:linear-gradient(145deg, #
 .auth-quota-filter select, .auth-quota-filter input { min-width:0; width:100%; padding:8px 10px; }
 .auth-quota-toolbar .auth-quota-filter { width:168px; }
 .auth-quota-toolbar .auth-quota-filter select, .auth-quota-toolbar .auth-quota-filter input { width:100%; min-height:38px; }
+/* Session-affinity toggle: mirrors .auth-quota-filter so it aligns with the
+   other toolbar controls while hosting the shared key-switch component. */
+.auth-quota-switch { display:grid; gap:4px; min-width:0; width:210px; }
+.auth-quota-switch-label { color:var(--muted); font-size:.72rem; font-weight:650; letter-spacing:.04em; white-space:nowrap; }
+.auth-quota-switch-row { display:flex; align-items:center; gap:8px; min-height:38px; padding:0 10px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+.auth-quota-switch-state { overflow:hidden; color:var(--muted); font-size:.72rem; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
+.auth-quota-switch-state.is-on { color:var(--accent); }
+html[data-palette="dark"] .auth-quota-switch-row { border-color:#48423b; background:#24211e; }
 .auth-quota-batch-modal { display:flex; flex-direction:column; width:min(460px, 100%); max-height:min(520px, calc(100dvh - 24px)); overflow:hidden; }
 .auth-quota-batch-modal .modal-header { flex:0 0 auto; padding:18px 20px 12px; border-bottom:0; }
 .auth-quota-batch-modal .modal-header .hint { margin-top:5px; }

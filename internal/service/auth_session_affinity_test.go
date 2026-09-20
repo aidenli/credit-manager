@@ -14,8 +14,13 @@ import (
 func affinityService(t *testing.T, enabled bool) (*Service, store.PluginKey, http.Header) {
 	t.Helper()
 	s := quotaService(t)
-	s.cfg.SessionAffinity.Enabled = enabled
-	s.cfg.SessionAffinity.TTL = time.Hour
+	// Exercise the same path the console uses: persist, then refresh the runtime cache.
+	if _, err := s.UpdateAuthSessionAffinitySettings(context.Background(), store.SessionAffinitySettings{
+		Enabled: enabled,
+		TTL:     time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	key, material, err := s.MintKeyWithPolicy(context.Background(), MintKeyRequest{Label: "affinity"})
 	if err != nil {
 		t.Fatal(err)
@@ -241,7 +246,7 @@ func TestSessionAffinityKeyIncludesProviderAndModel(t *testing.T) {
 // Unbound keys must be untouched by the feature.
 func TestSessionAffinityDoesNotAffectUnboundKeys(t *testing.T) {
 	s := quotaService(t)
-	s.cfg.SessionAffinity.Enabled = true
+	s.setSessionAffinityRuntime(true, time.Hour)
 	_, material, err := s.MintKeyWithPolicy(context.Background(), MintKeyRequest{Label: "unbound"})
 	if err != nil {
 		t.Fatal(err)

@@ -1,9 +1,13 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/yuluo688/credit-manager/internal/store"
 )
 
 // Session affinity for bound keys.
@@ -34,16 +38,87 @@ type sessionBinding struct {
 	expires  time.Time
 }
 
+// sessionAffinityState is the effective runtime toggle. It is cached in an
+// atomic pointer so the per-request hot path never queries the database, and it
+// is refreshed whenever the console writes new settings.
+type sessionAffinityState struct {
+	enabled bool
+	ttl     time.Duration
+}
+
+// sessionAffinitySettings returns the effective settings.
+//
+// Precedence: the database row (written by the console) wins; when no row exists
+// the config file supplies the default. Config therefore acts as the deployment
+// default and the database as the runtime override.
+func (s *Service) sessionAffinitySettings() store.SessionAffinitySettings {
+	if s == nil {
+		return store.DefaultSessionAffinitySettings()
+	}
+	if cached := s.sessionAffinityState.Load(); cached != nil {
+		return store.SessionAffinitySettings{Enabled: cached.enabled, TTL: cached.ttl}
+	}
+	s.sessionAffinityStateMu.Lock()
+	defer s.sessionAffinityStateMu.Unlock()
+	if cached := s.sessionAffinityState.Load(); cached != nil {
+		return store.SessionAffinitySettings{Enabled: cached.enabled, TTL: cached.ttl}
+	}
+	settings := store.DefaultSessionAffinitySettings()
+	if configured := s.cfg.SessionAffinity; configured.Enabled || configured.TTL > 0 {
+		settings.Enabled = configured.Enabled
+		if configured.TTL > 0 {
+			settings.TTL = configured.TTL
+		}
+	}
+	if s.store != nil {
+		if stored, err := s.store.GetAuthSessionAffinitySettings(context.Background()); err == nil {
+			settings = stored
+		}
+	}
+	s.storeSessionAffinityState(settings)
+	return settings
+}
+
+func (s *Service) storeSessionAffinityState(settings store.SessionAffinitySettings) {
+	ttl := settings.TTL
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	s.sessionAffinityState.Store(&sessionAffinityState{enabled: settings.Enabled, ttl: ttl})
+}
+
+// AuthSessionAffinitySettings exposes the effective settings to the management API.
+func (s *Service) AuthSessionAffinitySettings(_ context.Context) (store.SessionAffinitySettings, error) {
+	return s.sessionAffinitySettings(), nil
+}
+
+// UpdateAuthSessionAffinitySettings persists the toggle and refreshes the runtime
+// cache, so the change applies to the next request without a host restart.
+func (s *Service) UpdateAuthSessionAffinitySettings(ctx context.Context, settings store.SessionAffinitySettings) (store.SessionAffinitySettings, error) {
+	if s == nil || s.store == nil {
+		return store.SessionAffinitySettings{}, errors.New("session affinity settings unavailable")
+	}
+	updated, err := s.store.UpsertAuthSessionAffinitySettings(ctx, settings)
+	if err != nil {
+		return store.SessionAffinitySettings{}, err
+	}
+	s.storeSessionAffinityState(updated)
+	return updated, nil
+}
+
+// setSessionAffinityRuntime applies settings to the in-process cache only. Used
+// by tests to exercise the hot path without a database round trip.
+func (s *Service) setSessionAffinityRuntime(enabled bool, ttl time.Duration) {
+	s.storeSessionAffinityState(store.SessionAffinitySettings{Enabled: enabled, TTL: ttl})
+}
+
 // sessionAffinityEnabled reports whether the operator opted in.
 func (s *Service) sessionAffinityEnabled() bool {
-	if s == nil {
-		return false
-	}
-	return s.cfg.SessionAffinity.Enabled
+	return s.sessionAffinitySettings().Enabled
 }
 
 func (s *Service) sessionAffinityTTL() time.Duration {
-	ttl := s.cfg.SessionAffinity.TTL
+	ttl := s.sessionAffinitySettings().TTL
 	if ttl <= 0 {
 		ttl = time.Hour
 	}

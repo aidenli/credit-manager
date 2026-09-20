@@ -419,6 +419,21 @@ var migrations = []migration{
 				ON key_auth_bindings(provider, auth_id)`,
 		},
 	},
+	{
+		version: 27,
+		name:    "session affinity settings",
+		up: []string{
+			// Single-row runtime settings for bound-key session affinity. Kept in
+			// the database rather than a config file so the console can toggle it
+			// without editing host config or restarting the host.
+			`CREATE TABLE IF NOT EXISTS auth_session_affinity_settings (
+				id INTEGER PRIMARY KEY CHECK (id = 1),
+				enabled INTEGER NOT NULL DEFAULT 0,
+				ttl_seconds INTEGER NOT NULL DEFAULT 3600,
+				updated_at_unix_ms INTEGER NOT NULL
+			)`,
+		},
+	},
 }
 
 // Migrate applies every pending migration transactionally.

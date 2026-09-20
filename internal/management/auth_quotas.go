@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/yuluo688/credit-manager/internal/service"
 	"github.com/yuluo688/credit-manager/internal/store"
@@ -110,6 +111,60 @@ func updateAuthWarmupSettings(ctx context.Context, svc *service.Service, body []
 		return jsonErrNoStore(http.StatusBadRequest, err.Error()), nil
 	}
 	return jsonOKNoStore(updated), nil
+}
+
+// sessionAffinitySettingsView is the JSON shape the console renders. TTL is a
+// friendly string ("1h") rather than a nanosecond count.
+type sessionAffinitySettingsView struct {
+	Enabled   bool   `json:"enabled"`
+	TTL       string `json:"ttl"`
+	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+func sessionAffinityView(settings store.SessionAffinitySettings) sessionAffinitySettingsView {
+	view := sessionAffinitySettingsView{Enabled: settings.Enabled, TTL: settings.TTL.String()}
+	if settings.UpdatedAt != nil {
+		view.UpdatedAt = settings.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	return view
+}
+
+func getAuthSessionAffinitySettings(ctx context.Context, svc *service.Service) (pluginapi.ManagementResponse, error) {
+	settings, err := svc.AuthSessionAffinitySettings(ctx)
+	if err != nil {
+		return jsonErrNoStore(http.StatusServiceUnavailable, "session affinity settings unavailable"), nil
+	}
+	return jsonOKNoStore(sessionAffinityView(settings)), nil
+}
+
+func updateAuthSessionAffinitySettings(ctx context.Context, svc *service.Service, body []byte) (pluginapi.ManagementResponse, error) {
+	var req struct {
+		Enabled *bool   `json:"enabled"`
+		TTL     *string `json:"ttl"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return jsonErrNoStore(http.StatusBadRequest, "invalid json"), nil
+	}
+	current, err := svc.AuthSessionAffinitySettings(ctx)
+	if err != nil {
+		return jsonErrNoStore(http.StatusServiceUnavailable, "session affinity settings unavailable"), nil
+	}
+	// Field-missing means "leave unchanged", mirroring the key update contract.
+	if req.Enabled != nil {
+		current.Enabled = *req.Enabled
+	}
+	if req.TTL != nil {
+		parsed, parseErr := time.ParseDuration(strings.TrimSpace(*req.TTL))
+		if parseErr != nil {
+			return jsonErrNoStore(http.StatusBadRequest, "ttl must be a duration such as 1h or 30m"), nil
+		}
+		current.TTL = parsed
+	}
+	updated, err := svc.UpdateAuthSessionAffinitySettings(ctx, current)
+	if err != nil {
+		return jsonErrNoStore(http.StatusBadRequest, err.Error()), nil
+	}
+	return jsonOKNoStore(sessionAffinityView(updated)), nil
 }
 
 func updateAuthQuotaConcurrency(ctx context.Context, svc *service.Service, body []byte) (pluginapi.ManagementResponse, error) {
