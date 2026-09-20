@@ -762,10 +762,6 @@ func TestUsageFilterMatchesAuthIdentity(t *testing.T) {
 	if err != nil || count != 3 {
 		t.Fatalf("auth filter count = %d, err = %v", count, err)
 	}
-	auths, err := st.ListUsedAuths(ctx)
-	if err != nil || len(auths) < 2 {
-		t.Fatalf("used auths = %#v, err = %v", auths, err)
-	}
 }
 
 func TestGetAuthQuotaUsageMatchesProviderAliases(t *testing.T) {

@@ -245,7 +245,6 @@
     authQuotaBatchPayload: null,
     authQuotaBatchSaving: false,
     allKeys: [],
-    usedAuths: [],
     modelPrices: {},
     modelCatalogError: '',
     availableModels: [],
@@ -1515,8 +1514,7 @@
       loadSessionAffinitySettings().catch(() => {});
       await loadAuthQuotas();
       return;
-    }
-    if (tab === 'pricing') {
+    }    if (tab === 'pricing') {
       await loadOverviewBundle();
       if (seq !== state.tabLoadSeq) return;
       await loadModelCatalog();
@@ -1895,7 +1893,6 @@
     state.authQuotaPage = 1;
     state.authQuotaPageRefreshing = false;
     state.allKeys = [];
-    state.usedAuths = [];
     state.modelPrices = {};
     state.modelCatalogError = '';
     state.availableModels = [];
@@ -2412,10 +2409,11 @@
   function renderOverview(data) {
     const keys = (data.keys || []).filter(key => !key.revoked_at);
     const items = data.recent_usage || [];
-    state.usedAuths = data.used_auths || [];
     renderOverviewModelFilter(data.used_models || []);
     renderAuthSearchOptions('overview');
     renderAuthSearchOptions('usage');
+    // The account picker needs the host's live account list; load it once.
+    void loadAuthFilterAccounts();
     const activeKeys = keys.filter(k => k.enabled && !k.revoked_at).length;
     const totalTokens = items.reduce((sum, item) => sum + usageTokens(item), 0);
     const totalSpend = items.reduce((sum, item) => sum + Number(item.cost_micro_usd || 0), 0);
@@ -2803,26 +2801,30 @@
       authFilterValue(auth, 'auth_id'), authFilterValue(auth, 'auth_index')].join('\t');
   }
 
-  // Accounts whose host switch is off are still selectable (their history is
-  // real), but enabled accounts are listed first so the usual choices are on top.
-  // Read the raw field: authFilterValue stringifies, which would turn false into
-  // a truthy "false".
-  function authFilterDisabled(auth) {
-    if (!auth) return false;
-    const raw = auth.disabled != null ? auth.disabled : auth.Disabled;
-    return raw === true || raw === 'true' || raw === 1 || raw === '1';
+  // The account picker lists the host's live accounts (same source as the auth
+  // quotas tab) instead of the usage ledger: the ledger is historical, so it
+  // offered deleted accounts and one row per re-added auth_index.
+  let authFilterAccounts = [];
+
+  async function loadAuthFilterAccounts() {
+    try {
+      authFilterAccounts = (await loadAuthWarmupAuths()).filter(account => !account.disabled);
+    } catch (_) {
+      authFilterAccounts = [];
+    }
+    renderAuthSearchOptions('overview');
+    renderAuthSearchOptions('usage');
   }
 
-  function authFilterCompare(left, right) {
-    const byDisabled = Number(authFilterDisabled(left)) - Number(authFilterDisabled(right));
-    if (byDisabled !== 0) return byDisabled;
-    return authFilterLabel(left).localeCompare(authFilterLabel(right));
+  function authFilterSource() {
+    return authFilterAccounts;
   }
 
   function authSearchMatches(query) {
     query = String(query || '').trim().toLocaleLowerCase();
-    const items = state.usedAuths || [];
-    if (!query) return items.slice().sort(authFilterCompare);
+    // The host returns accounts sorted by display name; keep that order.
+    const items = authFilterSource();
+    if (!query) return items.slice();
     return items.filter(auth => {
       const haystack = [
         authFilterLabel(auth),
@@ -2834,7 +2836,7 @@
         authFilterValue(auth, 'auth_name') || authFilterValue(auth, 'name'),
       ].join(' ').toLocaleLowerCase();
       return haystack.includes(query);
-    }).sort(authFilterCompare);
+    });
   }
 
   function renderAuthSearchOptions(kind) {
@@ -2842,14 +2844,11 @@
     const panel = $(kind + 'AuthOptions');
     if (!input || !panel) return;
     const matches = authSearchMatches(input.value);
-    panel.innerHTML = matches.length ? matches.map((auth, index) => {
-      // The state tag follows the existing .revoked pattern: the label is a
-      // flex item with overflow:hidden, so an appended badge would be clipped.
-      const stateClass = authFilterDisabled(auth) ? ' is-off' : ' is-on';
-      return '<button class="key-search-option'+stateClass+'" type="button" data-auth-pos="'+index+'" title="'+esc(authFilterValue(auth, 'auth_id') || authFilterValue(auth, 'auth_index'))+'">' +
+    panel.innerHTML = matches.length ? matches.map((auth, index) =>
+      '<button class="key-search-option" type="button" data-auth-pos="'+index+'" title="'+esc(authFilterValue(auth, 'auth_id') || authFilterValue(auth, 'auth_index'))+'">' +
         '<span class="key-search-label">'+esc(authFilterLabel(auth))+'</span>' +
-      '</button>';
-    }).join('') : '<div class="key-search-empty">未找到匹配的账号</div>';
+      '</button>'
+    ).join('') : '<div class="key-search-empty">未找到匹配的账号</div>';
     panel.querySelectorAll('[data-auth-pos]').forEach(button => button.addEventListener('mousedown', event => {
       event.preventDefault();
       const auth = matches[Number(button.dataset.authPos)];
@@ -2882,7 +2881,7 @@
   function resolveAuthFilter(raw) {
     raw = String(raw || '').trim();
     if (!raw) return { auth_id: '', auth_provider: '', auth_index: '' };
-    const items = state.usedAuths || [];
+    const items = authFilterSource();
     const exact = items.find(auth => authFilterLabel(auth) === raw
       || authFilterValue(auth, 'auth_id') === raw
       || authFilterValue(auth, 'auth_index') === raw);
@@ -5475,7 +5474,7 @@
       const result = await api('GET', 'credit-manager/auth-quotas?page='+page+'&page_size=24');
       items.push(...(authQuotaValue(result, 'items') || []));
     }
-    return items.map(item => ({ provider: authQuotaValue(item, 'provider'), auth_id: authQuotaValue(item, 'auth_id'), auth_index: authQuotaValue(item, 'auth_index'), label: authQuotaValue(item, 'display_name') }));
+    return items.map(item => ({ provider: authQuotaValue(item, 'provider'), auth_id: authQuotaValue(item, 'auth_id'), auth_index: authQuotaValue(item, 'auth_index'), label: authQuotaValue(item, 'display_name'), disabled: authQuotaValue(item, 'disabled') === true }));
   }
   // Compact duration for the toolbar ("1h0m0s" -> "1h", "30m0s" -> "30m").
   // The full value stays in the tooltip.

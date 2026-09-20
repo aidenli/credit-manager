@@ -52,9 +52,6 @@ type AuthQuotaSource interface {
 	ListAuthQuotaFiles(context.Context) ([]AuthQuotaFile, error)
 	GetAuthQuotaJSON(context.Context, string) ([]byte, error)
 	DoAuthQuotaHTTP(context.Context, string, AuthQuotaHTTPRequest) (AuthQuotaHTTPResponse, error)
-	// AuthFileDisabled reports per host auth identifier whether the account is
-	// currently disabled, so management can mark which accounts are switched on.
-	AuthFileDisabled(context.Context) (map[string]bool, error)
 }
 
 type AuthQuotaFilter struct {
@@ -74,10 +71,13 @@ type AuthQuotaOverview struct {
 }
 
 type AuthQuotaOverviewItem struct {
-	AuthID                string               `json:"auth_id"`
-	AuthIndex             string               `json:"auth_index"`
-	Provider              string               `json:"provider"`
-	DisplayName           string               `json:"display_name"`
+	AuthID      string `json:"auth_id"`
+	AuthIndex   string `json:"auth_index"`
+	Provider    string `json:"provider"`
+	DisplayName string `json:"display_name"`
+	// Disabled mirrors the host's switch for this account. The console uses it to
+	// build the account picker from accounts that are actually enabled.
+	Disabled              bool                 `json:"disabled"`
 	Status                string               `json:"status"`
 	LastAttemptAt         *time.Time           `json:"last_attempt_at,omitempty"`
 	LastSuccessAt         *time.Time           `json:"last_success_at,omitempty"`
@@ -141,15 +141,6 @@ func (s *Service) authQuotaSourceValue() AuthQuotaSource {
 	return s.authQuotaSource
 }
 
-// AuthFileDisabled reports the host's disabled flag per auth identifier.
-// Best-effort: an error means the state is unknown, not that accounts are off.
-func (s *Service) AuthFileDisabled(ctx context.Context) (map[string]bool, error) {
-	source := s.authQuotaSourceValue()
-	if source == nil {
-		return nil, errors.New("auth quota source unavailable")
-	}
-	return source.AuthFileDisabled(ctx)
-}
 func (s *Service) AuthQuotaOverview(ctx context.Context, callback string, filter AuthQuotaFilter) (AuthQuotaOverview, error) {
 	// Listing is cache-only so opening the console does not query every
 	// upstream account. Do not wait on authQuotaRefreshMu: a 15s card fetch
@@ -480,7 +471,7 @@ func (s *Service) failedQuotaItem(ctx context.Context, item AuthQuotaOverviewIte
 	return item
 }
 func quotaItem(f AuthQuotaFile, p, id string) AuthQuotaOverviewItem {
-	return AuthQuotaOverviewItem{AuthID: id, AuthIndex: f.AuthIndex, Provider: p, DisplayName: first(f.Label, f.Email, f.Account, f.Name, id), Note: strings.TrimSpace(f.Note), Windows: []AuthQuotaWindow{}}
+	return AuthQuotaOverviewItem{AuthID: id, AuthIndex: f.AuthIndex, Provider: p, DisplayName: first(f.Label, f.Email, f.Account, f.Name, id), Note: strings.TrimSpace(f.Note), Disabled: f.Disabled, Windows: []AuthQuotaWindow{}}
 }
 func modTime(t time.Time) *time.Time {
 	if t.IsZero() {

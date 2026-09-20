@@ -410,19 +410,6 @@ type UsageFilter struct {
 	Offset          int
 }
 
-// UsageAuthSummary is a distinct auth identity observed in the usage ledger.
-type UsageAuthSummary struct {
-	AuthID    string `json:"auth_id"`
-	AuthIndex string `json:"auth_index"`
-	Provider  string `json:"auth_provider"`
-	Name      string `json:"auth_name"`
-	Label     string `json:"auth_label"`
-	Email     string `json:"auth_email"`
-	// Disabled mirrors the host's switch for this account. It is resolved by the
-	// management layer, not stored in the ledger.
-	Disabled bool `json:"disabled"`
-}
-
 func usageReportedTotalSQL(prefix string) string {
 	return "CASE WHEN " + prefix + "total_tokens > 0 THEN " + prefix + "total_tokens WHEN (" +
 		prefix + "input_tokens + " + prefix + "output_tokens + " + prefix + "reasoning_tokens) > 0 THEN (" +
@@ -689,30 +676,6 @@ FROM usage_ledger u`
 		if avgTPS.Valid {
 			value := avgTPS.Float64
 			item.AvgTokensPerSecond = &value
-		}
-		out = append(out, item)
-	}
-	return out, rows.Err()
-}
-
-// ListUsedAuths returns distinct auth identities that appear in the usage ledger.
-func (s *Store) ListUsedAuths(ctx context.Context) ([]UsageAuthSummary, error) {
-	rows, err := s.db.QueryContext(ctx, `
-SELECT COALESCE(auth_id, ''), COALESCE(auth_index, ''), COALESCE(auth_provider, ''),
-	COALESCE(MAX(auth_name), ''), COALESCE(MAX(auth_label), ''), COALESCE(MAX(auth_email), '')
-FROM usage_ledger
-WHERE COALESCE(TRIM(auth_id), '') != '' OR COALESCE(TRIM(auth_index), '') != ''
-GROUP BY 1, 2, 3
-ORDER BY 5 COLLATE NOCASE, 6 COLLATE NOCASE, 4 COLLATE NOCASE, 1 COLLATE NOCASE, 2 COLLATE NOCASE`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []UsageAuthSummary
-	for rows.Next() {
-		var item UsageAuthSummary
-		if err := rows.Scan(&item.AuthID, &item.AuthIndex, &item.Provider, &item.Name, &item.Label, &item.Email); err != nil {
-			return nil, err
 		}
 		out = append(out, item)
 	}

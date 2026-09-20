@@ -7,10 +7,10 @@ import (
 
 // Read endpoints must not be cacheable.
 //
-// The console fetches the overview (which carries used_auths and the key list)
-// and renders it directly. While those responses were cacheable the browser
-// served a stale payload after an upgrade, so a newly added field looked absent
-// and the account filter silently stopped ordering accounts (2026-09-20).
+// The console renders these payloads (keys, usage, the overview breakouts)
+// straight into the dashboard. While they were cacheable the browser served a
+// stale response after an upgrade, so newly added fields looked absent and the
+// account filter silently did nothing (2026-09-20).
 //
 // POST mutation endpoints intentionally keep the plain jsonOK helper; only the
 // read paths are asserted here.

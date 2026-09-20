@@ -67,33 +67,6 @@ func (hostAuthQuotaSource) ListAuthQuotaFiles(context.Context) ([]service.AuthQu
 	return files, nil
 }
 
-// AuthFileDisabled reports, per host auth identifier, whether the account is
-// currently disabled. The management console uses it to mark which accounts are
-// switched on. Best-effort: callers must treat an error as "unknown" rather than
-// "all disabled".
-func (hostAuthQuotaSource) AuthFileDisabled(context.Context) (map[string]bool, error) {
-	raw, err := callHost(pluginabi.MethodHostAuthList, map[string]any{})
-	if err != nil {
-		return nil, fmt.Errorf("list host auth files failed")
-	}
-	var response struct {
-		Files []pluginapi.HostAuthFileEntry `json:"files"`
-	}
-	if err := json.Unmarshal(raw, &response); err != nil {
-		return nil, fmt.Errorf("decode host auth files: %w", err)
-	}
-	out := make(map[string]bool, len(response.Files)*3)
-	for _, entry := range response.Files {
-		// Any identifier form, so a ledger identity matches whichever field it kept.
-		for _, candidate := range []string{entry.ID, entry.Name, entry.AuthIndex} {
-			if id := strings.TrimSpace(candidate); id != "" {
-				out[id] = entry.Disabled
-			}
-		}
-	}
-	return out, nil
-}
-
 func (hostAuthQuotaSource) GetAuthQuotaJSON(_ context.Context, authIndex string) ([]byte, error) {
 	raw, err := callHost(pluginabi.MethodHostAuthGet, pluginapi.HostAuthGetRequest{AuthIndex: authIndex})
 	if err != nil {
