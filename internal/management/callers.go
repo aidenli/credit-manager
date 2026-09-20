@@ -43,7 +43,7 @@ func listCallers(ctx context.Context, svc *service.Service, query map[string][]s
 	for _, item := range items {
 		out = append(out, callerView(item))
 	}
-	return jsonOK(map[string]any{"items": out}), nil
+	return jsonOKNoStore(map[string]any{"items": out}), nil
 }
 
 func setEnabled(ctx context.Context, svc *service.Service, body []byte) (pluginapi.ManagementResponse, error) {

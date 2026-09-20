@@ -32,7 +32,8 @@ func markUsedAuthsDisabled(used []store.UsageAuthSummary, disabled map[string]bo
 	}
 }
 
-func getOverview(ctx context.Context, svc *service.Service, query map[string][]string) (pluginapi.ManagementResponse, error) {	filter, err := usageFilterFromQuery(query, 500)
+func getOverview(ctx context.Context, svc *service.Service, query map[string][]string) (pluginapi.ManagementResponse, error) {
+	filter, err := usageFilterFromQuery(query, 500)
 	if err != nil {
 		return jsonErr(http.StatusBadRequest, err.Error()), nil
 	}
@@ -77,7 +78,10 @@ func getOverview(ctx context.Context, svc *service.Service, query map[string][]s
 	for _, u := range recent {
 		usageViews = append(usageViews, usageView(u))
 	}
-	return jsonOK(map[string]any{
+	// no-store: this payload is rebuilt per request and the console would
+	// otherwise serve a cached copy, silently missing new fields such as the
+	// per-account disabled flag.
+	return jsonOKNoStore(map[string]any{
 		"status":         "ok",
 		"plugin":         service.PluginID,
 		"version":        service.PluginVersion,
@@ -108,5 +112,5 @@ func getBalance(ctx context.Context, svc *service.Service, query map[string][]st
 	if err != nil {
 		return jsonErr(http.StatusInternalServerError, err.Error()), nil
 	}
-	return jsonOK(keyViewWithBindings(key, bindings)), nil
+	return jsonOKNoStore(keyViewWithBindings(key, bindings)), nil
 }

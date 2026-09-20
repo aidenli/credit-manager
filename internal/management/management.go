@@ -114,7 +114,7 @@ func Handle(ctx context.Context, req pluginapi.ManagementRequest) (pluginapi.Man
 	path := normalizePath(req.Path)
 	switch {
 	case req.Method == http.MethodGet && path == "credit-manager/health":
-		return jsonOK(map[string]any{
+		return jsonOKNoStore(map[string]any{
 			"status":  "ok",
 			"plugin":  service.PluginID,
 			"version": service.PluginVersion,

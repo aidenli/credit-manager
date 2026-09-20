@@ -176,7 +176,8 @@ func listKeys(ctx context.Context, svc *service.Service, query map[string][]stri
 	if err != nil {
 		return jsonErr(http.StatusInternalServerError, err.Error()), nil
 	}
-	return jsonOK(map[string]any{
+	// no-store: the key list feeds the console table and must not be cached.
+	return jsonOKNoStore(map[string]any{
 		"items":       out,
 		"page":        page,
 		"page_size":   pageSize,

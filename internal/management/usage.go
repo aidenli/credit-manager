@@ -47,7 +47,9 @@ func listUsage(ctx context.Context, svc *service.Service, query map[string][]str
 	for _, item := range items {
 		out = append(out, usageView(item))
 	}
-	return jsonOK(map[string]any{
+	// no-store: the console renders these straight into tables and would
+	// otherwise show a cached page after a refresh.
+	return jsonOKNoStore(map[string]any{
 		"items":       out,
 		"page":        page,
 		"page_size":   filter.Limit,
@@ -69,7 +71,7 @@ func usageSummary(ctx context.Context, svc *service.Service, query map[string][]
 	if err != nil {
 		return jsonErr(http.StatusInternalServerError, err.Error()), nil
 	}
-	return jsonOK(map[string]any{
+	return jsonOKNoStore(map[string]any{
 		"by_key":   byKey,
 		"by_model": byModel,
 		"filters":  usageFilterView(filter),
@@ -196,5 +198,6 @@ func listAudit(ctx context.Context, svc *service.Service, query map[string][]str
 	for _, item := range items {
 		out = append(out, auditView(item))
 	}
-	return jsonOK(map[string]any{"items": out}), nil
+	// no-store: audit rows are read-only history rendered into a table.
+	return jsonOKNoStore(map[string]any{"items": out}), nil
 }

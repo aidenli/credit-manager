@@ -106,7 +106,7 @@ func listPricing(ctx context.Context, svc *service.Service) (pluginapi.Managemen
 	if err != nil {
 		return jsonErr(http.StatusInternalServerError, err.Error()), nil
 	}
-	return jsonOK(map[string]any{"items": items}), nil
+	return jsonOKNoStore(map[string]any{"items": items}), nil
 }
 
 func deletePricing(ctx context.Context, svc *service.Service, body []byte) (pluginapi.ManagementResponse, error) {
