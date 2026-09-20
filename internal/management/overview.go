@@ -3,12 +3,38 @@ package management
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/yuluo688/credit-manager/internal/service"
 	"github.com/yuluo688/credit-manager/internal/store"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
+
+// filterUsedAuthsByLiveAccounts drops ledger identities whose account no longer
+// exists on the host. The boolean reports whether the live set was known; when it
+// is false the input is returned untouched so a host hiccup cannot hide accounts.
+func filterUsedAuthsByLiveAccounts(ctx context.Context, svc *service.Service, used []store.UsageAuthSummary) ([]store.UsageAuthSummary, bool) {
+	if len(used) == 0 {
+		return used, false
+	}
+	live, err := svc.HostAuthIDs(ctx)
+	if err != nil || len(live) == 0 {
+		return used, false
+	}
+	out := make([]store.UsageAuthSummary, 0, len(used))
+	for _, item := range used {
+		if _, ok := live[strings.TrimSpace(item.AuthID)]; ok {
+			out = append(out, item)
+			continue
+		}
+		// Older rows may only carry an auth_index; match that too.
+		if _, ok := live[strings.TrimSpace(item.AuthIndex)]; ok {
+			out = append(out, item)
+		}
+	}
+	return out, true
+}
 
 func getOverview(ctx context.Context, svc *service.Service, query map[string][]string) (pluginapi.ManagementResponse, error) {
 	filter, err := usageFilterFromQuery(query, 500)
@@ -39,6 +65,11 @@ func getOverview(ctx context.Context, svc *service.Service, query map[string][]s
 	if err != nil {
 		return jsonErr(http.StatusInternalServerError, err.Error()), nil
 	}
+	// The ledger is historical: it still lists accounts that were deleted or
+	// re-added. Keep only accounts the host currently holds so the console filter
+	// does not offer dead entries. This is best-effort — if the host cannot be
+	// asked, show everything rather than silently hiding real accounts.
+	usedAuths, liveAuthsKnown := filterUsedAuthsByLiveAccounts(ctx, svc, usedAuths)
 	recent, err := svc.Store().ListUsage(ctx, filter)
 	if err != nil {
 		return jsonErr(http.StatusInternalServerError, err.Error()), nil
@@ -62,6 +93,9 @@ func getOverview(ctx context.Context, svc *service.Service, query map[string][]s
 		"usage_by_model": byModel,
 		"used_models":    usedModels,
 		"used_auths":     usedAuths,
+		// Tells the console whether the account list was narrowed to live
+		// accounts, so it can explain why a previously used account is absent.
+		"used_auths_live_only": liveAuthsKnown,
 		"filters":        usageFilterView(filter),
 		"recent_usage":   usageViews,
 	}), nil

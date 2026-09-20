@@ -246,6 +246,7 @@
     authQuotaBatchSaving: false,
     allKeys: [],
     usedAuths: [],
+    usedAuthsLiveOnly: false,
     modelPrices: {},
     modelCatalogError: '',
     availableModels: [],
@@ -2413,6 +2414,7 @@
     const keys = (data.keys || []).filter(key => !key.revoked_at);
     const items = data.recent_usage || [];
     state.usedAuths = data.used_auths || [];
+    state.usedAuthsLiveOnly = !!data.used_auths_live_only;
     renderOverviewModelFilter(data.used_models || []);
     renderAuthSearchOptions('overview');
     renderAuthSearchOptions('usage');
@@ -2826,11 +2828,16 @@
     const panel = $(kind + 'AuthOptions');
     if (!input || !panel) return;
     const matches = authSearchMatches(input.value);
+    // The ledger is historical, so the list is narrowed to accounts that still
+    // exist. Say so, otherwise a missing account looks like a bug.
+    const liveOnlyHint = state.usedAuthsLiveOnly
+      ? '<div class="key-search-empty">仅列出当前存在的账号；已删除账号的历史用量仍可在明细中查看</div>'
+      : '';
     panel.innerHTML = matches.length ? matches.map((auth, index) =>
       '<button class="key-search-option" type="button" data-auth-pos="'+index+'" title="'+esc(authFilterValue(auth, 'auth_id') || authFilterValue(auth, 'auth_index'))+'">' +
         '<span class="key-search-label">'+esc(authFilterLabel(auth))+'</span>' +
       '</button>'
-    ).join('') : '<div class="key-search-empty">未找到匹配的账号</div>';
+    ).join('') + liveOnlyHint : '<div class="key-search-empty">未找到匹配的账号</div>' + liveOnlyHint;
     panel.querySelectorAll('[data-auth-pos]').forEach(button => button.addEventListener('mousedown', event => {
       event.preventDefault();
       const auth = matches[Number(button.dataset.authPos)];

@@ -67,6 +67,34 @@ func (hostAuthQuotaSource) ListAuthQuotaFiles(context.Context) ([]service.AuthQu
 	return files, nil
 }
 
+// HostAuthIDs reports the identifiers of the accounts the host currently holds.
+//
+// The usage ledger is historical, so a filter built from it alone would offer
+// accounts that were deleted or re-added. Management uses this set to keep only
+// accounts that still exist. Any identifier form the host exposes is accepted so
+// an entry is matched whichever field the ledger happened to store.
+func (hostAuthQuotaSource) HostAuthIDs(context.Context) (map[string]struct{}, error) {
+	raw, err := callHost(pluginabi.MethodHostAuthList, map[string]any{})
+	if err != nil {
+		return nil, fmt.Errorf("list host auth ids failed")
+	}
+	var response struct {
+		Files []pluginapi.HostAuthFileEntry `json:"files"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return nil, fmt.Errorf("decode host auth ids: %w", err)
+	}
+	ids := make(map[string]struct{}, len(response.Files)*3)
+	for _, entry := range response.Files {
+		for _, candidate := range []string{entry.ID, entry.Name, entry.AuthIndex} {
+			if id := strings.TrimSpace(candidate); id != "" {
+				ids[id] = struct{}{}
+			}
+		}
+	}
+	return ids, nil
+}
+
 func (hostAuthQuotaSource) GetAuthQuotaJSON(_ context.Context, authIndex string) ([]byte, error) {
 	raw, err := callHost(pluginabi.MethodHostAuthGet, pluginapi.HostAuthGetRequest{AuthIndex: authIndex})
 	if err != nil {
