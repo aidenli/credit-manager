@@ -51,9 +51,6 @@ type AuthQuotaSource interface {
 	ListAuthQuotaFiles(context.Context) ([]AuthQuotaFile, error)
 	GetAuthQuotaJSON(context.Context, string) ([]byte, error)
 	DoAuthQuotaHTTP(context.Context, string, AuthQuotaHTTPRequest) (AuthQuotaHTTPResponse, error)
-	// HostAuthIDs reports the identifiers of accounts the host currently holds,
-	// used to keep historical filters from offering deleted accounts.
-	HostAuthIDs(context.Context) (map[string]struct{}, error)
 }
 
 type AuthQuotaFilter struct {
@@ -138,17 +135,6 @@ func (s *Service) authQuotaSourceValue() AuthQuotaSource {
 	s.authQuotaMu.RLock()
 	defer s.authQuotaMu.RUnlock()
 	return s.authQuotaSource
-}
-
-// HostAuthIDs returns the identifiers of the accounts the host currently holds.
-// It is best-effort: when the host is unreachable the caller should treat the
-// live set as unknown rather than as empty.
-func (s *Service) HostAuthIDs(ctx context.Context) (map[string]struct{}, error) {
-	source := s.authQuotaSourceValue()
-	if source == nil {
-		return nil, errors.New("auth quota source unavailable")
-	}
-	return source.HostAuthIDs(ctx)
 }
 func (s *Service) AuthQuotaOverview(ctx context.Context, callback string, filter AuthQuotaFilter) (AuthQuotaOverview, error) {
 	// Listing is cache-only so opening the console does not query every

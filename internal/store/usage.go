@@ -693,47 +693,13 @@ FROM usage_ledger u`
 }
 
 // ListUsedAuths returns distinct auth identities that appear in the usage ledger.
-//
-// The ledger is historical, so the same account can appear once per host-assigned
-// auth_index (a runtime slot that changes when an account is re-added). Accounts are
-// therefore identified by (auth_provider, auth_id) and the most recent auth_index is
-// reported for each, which is the one a filter should target.
 func (s *Store) ListUsedAuths(ctx context.Context) ([]UsageAuthSummary, error) {
 	rows, err := s.db.QueryContext(ctx, `
-WITH scoped AS (
-	SELECT COALESCE(auth_id, '') AS auth_id,
-		COALESCE(auth_provider, '') AS auth_provider,
-		COALESCE(auth_index, '') AS auth_index,
-		COALESCE(auth_name, '') AS auth_name,
-		COALESCE(auth_label, '') AS auth_label,
-		COALESCE(auth_email, '') AS auth_email,
-		created_at_unix_ms,
-		id
-	FROM usage_ledger
-	WHERE COALESCE(TRIM(auth_id), '') != '' OR COALESCE(TRIM(auth_index), '') != ''
-), ranked AS (
-	-- Some historical rows carry the account id but no provider and/or no index,
-	-- and some carry only a runtime index. Group by the account id when present
-	-- (falling back to the index) so a re-added account collapses to one entry
-	-- while index-only rows stay distinct. Ranking prefers populated fields so the
-	-- informative row wins instead of a stub.
-	SELECT *,
-		ROW_NUMBER() OVER (
-			PARTITION BY CASE WHEN TRIM(auth_id) != '' THEN auth_id ELSE auth_index END
-			ORDER BY (TRIM(auth_index) != '') DESC,
-				(TRIM(auth_provider) != '') DESC,
-				created_at_unix_ms DESC,
-				id DESC
-		) AS rn
-	FROM scoped
-), best AS (
-	SELECT *, CASE WHEN TRIM(auth_id) != '' THEN auth_id ELSE auth_index END AS account_key
-	FROM ranked WHERE rn = 1
-)
-SELECT auth_id, auth_index, auth_provider,
+SELECT COALESCE(auth_id, ''), COALESCE(auth_index, ''), COALESCE(auth_provider, ''),
 	COALESCE(MAX(auth_name), ''), COALESCE(MAX(auth_label), ''), COALESCE(MAX(auth_email), '')
-FROM best
-GROUP BY account_key
+FROM usage_ledger
+WHERE COALESCE(TRIM(auth_id), '') != '' OR COALESCE(TRIM(auth_index), '') != ''
+GROUP BY 1, 2, 3
 ORDER BY 5 COLLATE NOCASE, 6 COLLATE NOCASE, 4 COLLATE NOCASE, 1 COLLATE NOCASE, 2 COLLATE NOCASE`)
 	if err != nil {
 		return nil, err

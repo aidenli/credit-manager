@@ -16,40 +16,21 @@ import (
 )
 
 type fakeQuotaSource struct {
-	files       []AuthQuotaFile
-	auth        string
-	auths       map[string]string
-	responses   map[string]string
-	requests    []AuthQuotaHTTPRequest
-	gets        int
-	got         []string
-	fail        bool
-	failHTTP    bool
-	status      int
-	statusBody  string
-	hostAuthIDs map[string]struct{}
+	files      []AuthQuotaFile
+	auth       string
+	auths      map[string]string
+	responses  map[string]string
+	requests   []AuthQuotaHTTPRequest
+	gets       int
+	got        []string
+	fail       bool
+	failHTTP   bool
+	status     int
+	statusBody string
 }
 
 func (f *fakeQuotaSource) ListAuthQuotaFiles(context.Context) ([]AuthQuotaFile, error) {
 	return f.files, nil
-}
-func (f *fakeQuotaSource) HostAuthIDs(context.Context) (map[string]struct{}, error) {
-	if f.fail {
-		return nil, errors.New("host failed")
-	}
-	// Default: every listed file is a live account.
-	ids := make(map[string]struct{}, len(f.files)*2)
-	for _, file := range f.files {
-		for _, candidate := range []string{file.ID, file.AuthIndex} {
-			if candidate != "" {
-				ids[candidate] = struct{}{}
-			}
-		}
-	}
-	for id := range f.hostAuthIDs {
-		ids[id] = struct{}{}
-	}
-	return ids, nil
 }
 func (f *fakeQuotaSource) GetAuthQuotaJSON(_ context.Context, authIndex string) ([]byte, error) {
 	f.gets++
