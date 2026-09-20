@@ -17,7 +17,7 @@ import (
 const (
 	PluginID      = "credit-manager"
 	PluginName    = "CPA Credit Manager"
-	PluginVersion = "1.8.4"
+	PluginVersion = "1.8.5"
 	// CallerScopeMetadataKey mirrors sdk/cliproxy/executor.CallerScopeMetadataKey.
 	CallerScopeMetadataKey = "caller_scope"
 )
