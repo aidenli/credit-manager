@@ -179,26 +179,57 @@ func updateAuthSessionAffinitySettings(ctx context.Context, svc *service.Service
 }
 
 // authFallbackSettingsView is the JSON shape the console renders for the
-// API-provider fallback of bound keys.
+// API-provider fallback of bound keys. The counters make a silent switch to paid
+// traffic visible.
 type authFallbackSettingsView struct {
-	Enabled   bool   `json:"enabled"`
-	UpdatedAt string `json:"updated_at,omitempty"`
+	Enabled   bool                 `json:"enabled"`
+	UpdatedAt string               `json:"updated_at,omitempty"`
+	HitsTotal int64                `json:"hits_total"`
+	Hits24h   int64                `json:"hits_24h"`
+	LastHitAt string               `json:"last_hit_at,omitempty"`
+	LastHit   *authFallbackHitView `json:"last_hit,omitempty"`
 }
 
-func authFallbackView(settings store.AuthFallbackSettings) authFallbackSettingsView {
-	view := authFallbackSettingsView{Enabled: settings.Enabled}
-	if settings.UpdatedAt != nil {
-		view.UpdatedAt = settings.UpdatedAt.UTC().Format(time.RFC3339)
+type authFallbackHitView struct {
+	PluginKeyID string `json:"plugin_key_id,omitempty"`
+	Label       string `json:"label,omitempty"`
+	Provider    string `json:"provider,omitempty"`
+	AuthID      string `json:"auth_id,omitempty"`
+	Model       string `json:"model,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+	At          string `json:"at,omitempty"`
+}
+
+func authFallbackView(status service.AuthFallbackStatus) authFallbackSettingsView {
+	view := authFallbackSettingsView{
+		Enabled:   status.Settings.Enabled,
+		HitsTotal: status.TotalHits,
+		Hits24h:   status.RecentHits,
+	}
+	if status.Settings.UpdatedAt != nil {
+		view.UpdatedAt = status.Settings.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	if hit := status.LastHit; hit != nil {
+		view.LastHitAt = hit.At.UTC().Format(time.RFC3339)
+		view.LastHit = &authFallbackHitView{
+			PluginKeyID: hit.PluginKeyID,
+			Label:       hit.Label,
+			Provider:    hit.Provider,
+			AuthID:      hit.AuthID,
+			Model:       hit.Model,
+			Reason:      hit.Reason,
+			At:          hit.At.UTC().Format(time.RFC3339),
+		}
 	}
 	return view
 }
 
 func getAuthFallbackSettings(ctx context.Context, svc *service.Service) (pluginapi.ManagementResponse, error) {
-	settings, err := svc.AuthFallbackSettings(ctx)
+	status, err := svc.AuthFallbackStatus(ctx)
 	if err != nil {
 		return jsonErrNoStore(http.StatusServiceUnavailable, "auth fallback settings unavailable"), nil
 	}
-	return jsonOKNoStore(authFallbackView(settings)), nil
+	return jsonOKNoStore(authFallbackView(status)), nil
 }
 
 func updateAuthFallbackSettings(ctx context.Context, svc *service.Service, body []byte) (pluginapi.ManagementResponse, error) {
@@ -216,11 +247,15 @@ func updateAuthFallbackSettings(ctx context.Context, svc *service.Service, body 
 	if req.Enabled != nil {
 		current.Enabled = *req.Enabled
 	}
-	updated, err := svc.UpdateAuthFallbackSettings(ctx, current)
-	if err != nil {
+	if _, err := svc.UpdateAuthFallbackSettings(ctx, current); err != nil {
 		return jsonErrNoStore(http.StatusBadRequest, err.Error()), nil
 	}
-	return jsonOKNoStore(authFallbackView(updated)), nil
+	// Re-read so the response carries the counters the console renders.
+	status, err := svc.AuthFallbackStatus(ctx)
+	if err != nil {
+		return jsonErrNoStore(http.StatusServiceUnavailable, "auth fallback settings unavailable"), nil
+	}
+	return jsonOKNoStore(authFallbackView(status)), nil
 }
 
 func updateAuthQuotaConcurrency(ctx context.Context, svc *service.Service, body []byte) (pluginapi.ManagementResponse, error) {

@@ -436,6 +436,63 @@ func TestListAuditEventsFiltersByPluginKey(t *testing.T) {
 	}
 }
 
+// Standalone audit events back the API-provider fallback counters, which are
+// read on every console refresh and therefore have their own query helpers.
+func TestStandaloneAuditEventsAreCountable(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	defer st.Close()
+	key := newTestKey(t, ctx, st, PluginKeySpec{})
+
+	total, recent, last, err := st.AuditEventStatsByType(ctx, "auth_fallback", time.Now().Add(-24*time.Hour).UnixMilli())
+	if err != nil {
+		t.Fatalf("stats on empty table: %v", err)
+	}
+	if total != 0 || recent != 0 || last != 0 {
+		t.Fatalf("empty stats = (%d, %d, %d)", total, recent, last)
+	}
+	if _, ok, err := st.LatestAuditEventByType(ctx, "auth_fallback"); err != nil || ok {
+		t.Fatalf("latest on empty table = (%t, %v)", ok, err)
+	}
+
+	if err := st.InsertAuditEvent(ctx, key.CallerID, key.ID, "auth_fallback", `{"reason":"not_offered"}`); err != nil {
+		t.Fatalf("insert audit event: %v", err)
+	}
+	// An unrelated type must not be counted, and a stale one must not be recent.
+	if err := st.InsertAuditEvent(ctx, key.CallerID, key.ID, "quota_held", ""); err != nil {
+		t.Fatalf("insert unrelated event: %v", err)
+	}
+
+	total, recent, last, err = st.AuditEventStatsByType(ctx, "auth_fallback", time.Now().Add(-24*time.Hour).UnixMilli())
+	if err != nil {
+		t.Fatalf("stats after insert: %v", err)
+	}
+	if total != 1 || recent != 1 || last == 0 {
+		t.Fatalf("stats after insert = (%d, %d, %d)", total, recent, last)
+	}
+	total, recent, _, err = st.AuditEventStatsByType(ctx, "auth_fallback", time.Now().Add(time.Hour).UnixMilli())
+	if err != nil {
+		t.Fatalf("stats with future window: %v", err)
+	}
+	if total != 1 || recent != 0 {
+		t.Fatalf("windowed stats = (%d, %d)", total, recent)
+	}
+
+	event, ok, err := st.LatestAuditEventByType(ctx, "auth_fallback")
+	if err != nil || !ok {
+		t.Fatalf("latest = (%t, %v)", ok, err)
+	}
+	if event.EventType != "auth_fallback" || event.PluginKeyID == nil || *event.PluginKeyID != key.ID {
+		t.Fatalf("latest event = %#v", event)
+	}
+	if event.DetailsJSON != `{"reason":"not_offered"}` {
+		t.Fatalf("details = %q", event.DetailsJSON)
+	}
+	if event.CreatedAt.IsZero() {
+		t.Fatal("created_at is zero")
+	}
+}
+
 func TestAuditEventJSONUsesAPINames(t *testing.T) {
 	event := AuditEvent{ID: 1, EventType: "quota_held"}
 	raw, err := json.Marshal(event)

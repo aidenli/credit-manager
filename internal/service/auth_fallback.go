@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/yuluo688/credit-manager/internal/store"
 )
@@ -34,6 +36,106 @@ import (
 // dedicated scope so fallback picks never disturb the provider-wide cursor the
 // host-independent rotation uses.
 const authPickScopeFallback = "\x00fallback"
+
+// Fallback hits are persisted as audit events because the switch is otherwise
+// invisible: from the client's point of view the request simply succeeded, and
+// the money moved to a different, shared account. The console reports these
+// counts, so an operator notices "quota exhausted" instead of only seeing the
+// bill.
+const (
+	authFallbackEventType = "auth_fallback"
+	// authFallbackReasonNotOffered means the request never offered an account the
+	// key is bound to (cooldown, disabled, or the model does not route there).
+	authFallbackReasonNotOffered = "not_offered"
+	// authFallbackReasonBusy means the bound accounts were offered but all of them
+	// were at their concurrency cap or warmup-held.
+	authFallbackReasonBusy = "unavailable"
+	// authFallbackRecentWindow is the window the console reports separately.
+	authFallbackRecentWindow = 24 * time.Hour
+)
+
+// AuthFallbackHit describes one fallback decision.
+type AuthFallbackHit struct {
+	PluginKeyID string
+	Label       string
+	Provider    string
+	AuthID      string
+	Model       string
+	Reason      string
+	At          time.Time
+}
+
+// AuthFallbackStatus is the effective toggle plus its counters.
+type AuthFallbackStatus struct {
+	Settings   store.AuthFallbackSettings
+	TotalHits  int64
+	RecentHits int64
+	LastHit    *AuthFallbackHit
+}
+
+type authFallbackDetails struct {
+	Provider string `json:"provider"`
+	AuthID   string `json:"auth_id"`
+	Model    string `json:"model"`
+	Reason   string `json:"reason"`
+}
+
+// recordAuthFallbackHit persists one fallback decision. It is best effort: the
+// request has already been routed and must not fail because the audit write did.
+func (s *Service) recordAuthFallbackHit(ctx context.Context, key store.PluginKey, candidate AuthPickCandidate, model, reason string) {
+	if s == nil || s.store == nil {
+		return
+	}
+	details, err := json.Marshal(authFallbackDetails{
+		Provider: authLimitProvider(candidate.Provider),
+		AuthID:   strings.TrimSpace(candidate.ID),
+		Model:    strings.TrimSpace(model),
+		Reason:   reason,
+	})
+	if err != nil {
+		return
+	}
+	_ = s.store.InsertAuditEvent(ctx, key.CallerID, key.ID, authFallbackEventType, string(details))
+}
+
+// AuthFallbackStatus reports the toggle and how often it fired.
+func (s *Service) AuthFallbackStatus(ctx context.Context) (AuthFallbackStatus, error) {
+	status := AuthFallbackStatus{Settings: s.authFallbackSettings()}
+	if s == nil || s.store == nil {
+		return status, nil
+	}
+	since := time.Now().Add(-authFallbackRecentWindow).UnixMilli()
+	total, recent, lastUnixMilli, err := s.store.AuditEventStatsByType(ctx, authFallbackEventType, since)
+	if err != nil {
+		return status, err
+	}
+	status.TotalHits, status.RecentHits = total, recent
+	if lastUnixMilli == 0 {
+		return status, nil
+	}
+	event, ok, err := s.store.LatestAuditEventByType(ctx, authFallbackEventType)
+	if err != nil || !ok {
+		return status, err
+	}
+	hit := &AuthFallbackHit{At: event.CreatedAt}
+	if event.PluginKeyID != nil {
+		hit.PluginKeyID = strings.TrimSpace(*event.PluginKeyID)
+	}
+	var details authFallbackDetails
+	if err := json.Unmarshal([]byte(event.DetailsJSON), &details); err == nil {
+		hit.Provider = details.Provider
+		hit.AuthID = details.AuthID
+		hit.Model = details.Model
+		hit.Reason = details.Reason
+	}
+	if hit.PluginKeyID != "" {
+		if key, err := s.store.GetPluginKey(ctx, hit.PluginKeyID); err == nil {
+			hit.Label = key.Label
+		}
+	}
+	status.LastHit = hit
+	return status, nil
+}
 
 // authFallbackState is the effective runtime toggle. It is cached in an atomic
 // pointer so the per-request path never queries the database, and it is

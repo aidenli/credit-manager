@@ -250,21 +250,28 @@ func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candi
 	if err != nil {
 		return "", false, err
 	}
+	// The lock is released explicitly rather than deferred: the fallback audit
+	// write is I/O and must not run while holding the lock shared by every pick.
 	s.authMu.Lock()
-	defer s.authMu.Unlock()
 	s.ensureAuthPendingLocked()
 	// One branch covers both fail-closed cases: no bound account is offered for
 	// this request (scoped is empty) and every bound account is at its
 	// concurrency cap or warmup-held (available is empty).
 	available, _ := s.filterAvailableAuthLocked(limits, scoped)
 	if len(available) == 0 {
-		// None of the key's own accounts can serve this request. An API provider
-		// from this very candidate list may cover it instead, when enabled.
-		if fallback, ok := s.pickFallbackAPIAuthLocked(limits, candidates); ok {
+		fallback, ok := s.pickFallbackAPIAuthLocked(limits, candidates)
+		reason := authFallbackReasonBusy
+		if len(scoped) == 0 {
+			reason = authFallbackReasonNotOffered
+		}
+		if ok {
 			fallbackID := strings.TrimSpace(fallback.ID)
 			s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: fallbackID, Provider: fallback.Provider})
+			s.authMu.Unlock()
+			s.recordAuthFallbackHit(ctx, key, fallback, model, reason)
 			return fallbackID, true, nil
 		}
+		s.authMu.Unlock()
 		return "", true, ErrNoBoundAuthAvailable
 	}
 	// Bound keys keep their own cursor so one key cannot skew another key's rotation.
@@ -276,6 +283,7 @@ func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candi
 	}
 	chosen := s.chooseBoundAuthLocked(key.ID+"\x00"+provider, provider, sessionID, strings.TrimSpace(model), available, time.Now())
 	s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: strings.TrimSpace(chosen.ID), Provider: chosen.Provider})
+	s.authMu.Unlock()
 	return strings.TrimSpace(chosen.ID), true, nil
 }
 

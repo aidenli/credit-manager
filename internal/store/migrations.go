@@ -448,6 +448,17 @@ var migrations = []migration{
 			)`,
 		},
 	},
+	{
+		version: 29,
+		name:    "audit event type index",
+		up: []string{
+			// The fallback status endpoint counts one event type on every console
+			// refresh; without this index that count is a full scan of a table that
+			// grows with every settlement.
+			`CREATE INDEX IF NOT EXISTS audit_events_type_idx
+				ON audit_events(event_type, created_at_unix_ms)`,
+		},
+	},
 }
 
 // Migrate applies every pending migration transactionally.

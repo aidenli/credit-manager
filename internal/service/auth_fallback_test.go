@@ -259,3 +259,121 @@ func TestPickAuthForKeyFallbackRequiresValidKey(t *testing.T) {
 		t.Fatalf("unknown key pick = handled:%t err:%v", handled, err)
 	}
 }
+
+// Every fallback decision is persisted, because from the client's point of view
+// the request simply succeeded.
+func TestPickAuthForKeyRecordsFallbackHit(t *testing.T) {
+	s := fallbackService(t, true)
+	ctx := context.Background()
+	key, headers := boundKey(t, s, "recorded")
+	bindOneAccount(t, s, key.ID, "account-9")
+
+	before, err := s.AuthFallbackStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.TotalHits != 0 || before.LastHit != nil {
+		t.Fatalf("fresh status = %#v", before)
+	}
+
+	if _, _, err := s.PickAuthForKey(ctx, headers, apiCandidates(), "gpt-5.6-sol"); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := s.AuthFallbackStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Settings.Enabled || status.TotalHits != 1 || status.RecentHits != 1 {
+		t.Fatalf("status after one hit = %#v", status)
+	}
+	hit := status.LastHit
+	if hit == nil {
+		t.Fatal("last hit was not recorded")
+	}
+	if hit.PluginKeyID != key.ID || hit.Label != "recorded" {
+		t.Fatalf("hit key = %#v", hit)
+	}
+	if hit.Provider != apiProvider || hit.AuthID != apiAccount1 || hit.Model != "gpt-5.6-sol" {
+		t.Fatalf("hit details = %#v", hit)
+	}
+	if hit.Reason != authFallbackReasonNotOffered {
+		t.Fatalf("hit reason = %q", hit.Reason)
+	}
+	if hit.At.IsZero() {
+		t.Fatal("hit timestamp is zero")
+	}
+}
+
+// A bound account that is offered but busy is recorded with its own reason, so
+// the console can tell "never routed here" from "at capacity".
+func TestPickAuthForKeyRecordsBusyReason(t *testing.T) {
+	s := fallbackService(t, true)
+	ctx := context.Background()
+	key, headers := boundKey(t, s, "busy-reason")
+	bindOneAccount(t, s, key.ID, "account-1")
+
+	if err := s.Store().UpsertAuthConcurrencyLimit(ctx, "codex", "account-1", 1); err != nil {
+		t.Fatal(err)
+	}
+	s.TrackAuthCapture("res-busy-reason", "gpt-5.6-sol")
+	if err := s.AdmitAuth(ctx, "res-busy-reason", store.AuthIdentity{AuthID: "account-1", Provider: "codex"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, handled, err := s.PickAuthForKey(ctx, headers, apiCandidates(), "gpt-5.6-sol"); err != nil || !handled {
+		t.Fatalf("busy fallback pick = (%t, %v)", handled, err)
+	}
+
+	status, err := s.AuthFallbackStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.TotalHits != 1 || status.LastHit == nil || status.LastHit.Reason != authFallbackReasonBusy {
+		t.Fatalf("status = %#v (last=%#v)", status, status.LastHit)
+	}
+}
+
+// Disabled and failing paths must not inflate the counter.
+func TestPickAuthForKeyDoesNotRecordWithoutFallback(t *testing.T) {
+	ctx := context.Background()
+	s := fallbackService(t, false)
+	key, headers := boundKey(t, s, "no-record")
+	bindOneAccount(t, s, key.ID, "account-9")
+
+	if _, _, err := s.PickAuthForKey(ctx, headers, apiCandidates(), "gpt-5.6-sol"); !errors.Is(err, ErrNoBoundAuthAvailable) {
+		t.Fatalf("disabled pick error = %v", err)
+	}
+	// Enabled, but the request offers no API provider to fall back to.
+	s.setAuthFallbackRuntime(true)
+	if _, _, err := s.PickAuthForKey(ctx, headers, []AuthPickCandidate{{ID: "account-1", Provider: "codex"}}, "gpt-5.6-sol"); !errors.Is(err, ErrNoBoundAuthAvailable) {
+		t.Fatalf("no-candidate pick error = %v", err)
+	}
+
+	status, err := s.AuthFallbackStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.TotalHits != 0 || status.LastHit != nil {
+		t.Fatalf("unexpected hits recorded: %#v", status)
+	}
+}
+
+// The audit event must be visible in the existing audit stream too.
+func TestFallbackHitAppearsInAuditStream(t *testing.T) {
+	s := fallbackService(t, true)
+	ctx := context.Background()
+	key, headers := boundKey(t, s, "audit-stream")
+	bindOneAccount(t, s, key.ID, "account-9")
+
+	if _, _, err := s.PickAuthForKey(ctx, headers, apiCandidates(), "gpt-5.6-sol"); err != nil {
+		t.Fatal(err)
+	}
+	events, err := s.Store().ListAuditEventsFiltered(ctx, store.AuditFilter{PluginKeyID: key.ID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 || events[0].EventType != authFallbackEventType {
+		t.Fatalf("audit events = %#v", events)
+	}
+}

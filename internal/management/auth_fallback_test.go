@@ -6,6 +6,10 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/yuluo688/credit-manager/internal/service"
+	"github.com/yuluo688/credit-manager/internal/store"
 )
 
 func TestAuthFallbackSettingsRoundTrip(t *testing.T) {
@@ -26,6 +30,14 @@ func TestAuthFallbackSettingsRoundTrip(t *testing.T) {
 	}
 	if view["enabled"] != false {
 		t.Fatalf("default enabled = %#v", view["enabled"])
+	}
+	// A fresh deployment reports zero hits rather than omitting the field, so the
+	// console can render the counter without special-casing a missing value.
+	if view["hits_total"] != float64(0) || view["hits_24h"] != float64(0) {
+		t.Fatalf("default counters = %#v / %#v", view["hits_total"], view["hits_24h"])
+	}
+	if _, present := view["last_hit"]; present {
+		t.Fatalf("default last_hit = %#v, want absent", view["last_hit"])
 	}
 
 	resp, err = updateAuthFallbackSettings(ctx, svc, []byte(`{"enabled":true}`))
@@ -94,6 +106,45 @@ func TestAuthFallbackSettingsRejectsBadInput(t *testing.T) {
 	}
 }
 
+func TestAuthFallbackViewCarriesCountersAndLastHit(t *testing.T) {
+	at := time.Date(2026, 9, 21, 3, 4, 5, 0, time.UTC)
+	raw, err := json.Marshal(authFallbackView(service.AuthFallbackStatus{
+		Settings:   store.AuthFallbackSettings{Enabled: true, UpdatedAt: &at},
+		TotalHits:  7,
+		RecentHits: 2,
+		LastHit: &service.AuthFallbackHit{
+			PluginKeyID: "key-1",
+			Label:       "gd aiden",
+			Provider:    "openai-compatible-agnes",
+			AuthID:      "openai-compatibility:agnes:4dab06a22e06",
+			Model:       "gpt-5.6-sol",
+			Reason:      "not_offered",
+			At:          at,
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// These are the names the console reads; a rename here breaks the counter
+	// silently, so the contract is asserted as raw JSON.
+	for _, want := range []string{
+		`"enabled":true`,
+		`"hits_total":7`,
+		`"hits_24h":2`,
+		`"plugin_key_id":"key-1"`,
+		`"label":"gd aiden"`,
+		`"provider":"openai-compatible-agnes"`,
+		`"auth_id":"openai-compatibility:agnes:4dab06a22e06"`,
+		`"model":"gpt-5.6-sol"`,
+		`"reason":"not_offered"`,
+		`"last_hit_at":"2026-09-21T03:04:05Z"`,
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("fallback view is missing %s: %s", want, raw)
+		}
+	}
+}
+
 func TestConsoleExposesAuthFallbackToggle(t *testing.T) {
 	page := strings.ReplaceAll(string(consolePage().Body), "\r\n", "\n")
 	for _, text := range []string{
@@ -104,6 +155,7 @@ func TestConsoleExposesAuthFallbackToggle(t *testing.T) {
 		"function saveAuthFallbackSettings",
 		"credit-manager/auth-quotas/fallback",
 		"API 兜底（绑定 Key）",
+		"settings.hits_total",
 	} {
 		if !strings.Contains(page, text) {
 			t.Fatalf("console is missing the API fallback toggle: %q", text)

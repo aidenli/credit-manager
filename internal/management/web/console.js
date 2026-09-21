@@ -5575,12 +5575,25 @@
       toggle.checked = enabled;
       toggle.disabled = false;
     }
+    const total = Number((settings && settings.hits_total) || 0);
+    const recent = Number((settings && settings.hits_24h) || 0);
+    const last = (settings && settings.last_hit) || null;
     const stateEl = $('authFallbackState');
     if (stateEl) {
-      stateEl.textContent = enabled ? t('已开启') : t('已关闭');
-      stateEl.title = enabled
-        ? t('绑定 Key 的账号不可用时改用 API 提供商')
-        : t('API 兜底已关闭');
+      let text = enabled ? t('已开启') : t('已关闭');
+      if (total > 0) {
+        text += ' · ' + t('兜底') + ' ' + total + ' ' + t('次');
+        if (recent > 0) text += ' (' + t('24 小时') + ' ' + recent + ')';
+      }
+      stateEl.textContent = text;
+      const lines = [];
+      lines.push(enabled ? t('绑定 Key 的账号不可用时改用 API 提供商') : t('API 兜底已关闭'));
+      if (last) {
+        const who = last.label || last.plugin_key_id || '-';
+        const where = [last.provider, last.model].filter(Boolean).join(' / ');
+        lines.push(t('最近一次') + '：' + who + (where ? ' → ' + where : '') + (last.at ? ' · ' + last.at : ''));
+      }
+      stateEl.title = lines.join('\n');
       stateEl.classList.toggle('is-on', enabled);
     }
   }
