@@ -585,6 +585,16 @@
             <span class="auth-quota-switch-state" id="authSessionAffinityState">读取中…</span>
           </div>
         </div>
+        <div class="auth-quota-switch" title="开启后，绑定 Key 的 OAuth 账号全部不可用时，改用本次请求候选中已有的 API 提供商继续服务；未绑定的 Key 不受影响。立即生效，无需重启。">
+          <span class="auth-quota-switch-label">API 兜底（绑定 Key）</span>
+          <div class="auth-quota-switch-row">
+            <label class="key-switch">
+              <input id="authFallbackEnabled" type="checkbox" role="switch" aria-label="API 兜底（绑定 Key）"/>
+              <span class="key-switch-ui" aria-hidden="true"></span>
+            </label>
+            <span class="auth-quota-switch-state" id="authFallbackState">读取中…</span>
+          </div>
+        </div>
         <div class="auth-quota-batch">
           <label class="auth-quota-filter">
             <span>批量并发</span>

@@ -52,9 +52,13 @@ type Service struct {
 	// mutex only guards the one-time/miss load from the database.
 	sessionAffinityState   atomic.Pointer[sessionAffinityState]
 	sessionAffinityStateMu sync.Mutex
-	directorySyncer        ModelDirectorySyncer
-	directoryIDsMu         sync.Mutex
-	lastDirectoryIDs       []string
+	// authFallbackState caches the effective API-provider fallback toggle for the
+	// pick path; the mutex only guards the one-time/miss load from the database.
+	authFallbackState   atomic.Pointer[authFallbackState]
+	authFallbackStateMu sync.Mutex
+	directorySyncer     ModelDirectorySyncer
+	directoryIDsMu      sync.Mutex
+	lastDirectoryIDs    []string
 }
 
 // authMutex is copy-safe because it shares its underlying lock. A same-store

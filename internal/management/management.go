@@ -174,6 +174,10 @@ func Handle(ctx context.Context, req pluginapi.ManagementRequest) (pluginapi.Man
 		return getAuthSessionAffinitySettings(ctx, svc)
 	case req.Method == http.MethodPost && path == "credit-manager/auth-quotas/session-affinity":
 		return updateAuthSessionAffinitySettings(ctx, svc, req.Body)
+	case req.Method == http.MethodGet && path == "credit-manager/auth-quotas/fallback":
+		return getAuthFallbackSettings(ctx, svc)
+	case req.Method == http.MethodPost && path == "credit-manager/auth-quotas/fallback":
+		return updateAuthFallbackSettings(ctx, svc, req.Body)
 	case req.Method == http.MethodGet && path == "credit-manager/auth-accounts":
 		return getAuthAccounts(ctx, svc)
 	case req.Method == http.MethodPost && path == "credit-manager/auth-quotas/concurrency/batch":

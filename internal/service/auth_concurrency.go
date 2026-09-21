@@ -193,7 +193,9 @@ func (s *Service) PickAuth(ctx context.Context, candidates []AuthPickCandidate) 
 
 // PickAuthForKey routes one scheduler decision for the key behind the request.
 // Keys without bindings keep the unbound behaviour unchanged. Bound keys may
-// only use their own accounts and fail closed when none of them is available.
+// only use their own accounts; when none of them can serve the request they fall
+// back to an API provider if the operator enabled that, and otherwise fail
+// closed.
 //
 // model only participates in the session-affinity binding key (mirroring the
 // host's provider::session::model cache key); selection itself is model-agnostic
@@ -244,9 +246,6 @@ func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candi
 		}
 		scoped = append(scoped, candidate)
 	}
-	if len(scoped) == 0 {
-		return "", true, ErrNoBoundAuthAvailable
-	}
 	limits, err := s.store.ListAuthConcurrencyLimits(ctx)
 	if err != nil {
 		return "", false, err
@@ -254,8 +253,18 @@ func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candi
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
 	s.ensureAuthPendingLocked()
+	// One branch covers both fail-closed cases: no bound account is offered for
+	// this request (scoped is empty) and every bound account is at its
+	// concurrency cap or warmup-held (available is empty).
 	available, _ := s.filterAvailableAuthLocked(limits, scoped)
 	if len(available) == 0 {
+		// None of the key's own accounts can serve this request. An API provider
+		// from this very candidate list may cover it instead, when enabled.
+		if fallback, ok := s.pickFallbackAPIAuthLocked(limits, candidates); ok {
+			fallbackID := strings.TrimSpace(fallback.ID)
+			s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: fallbackID, Provider: fallback.Provider})
+			return fallbackID, true, nil
+		}
 		return "", true, ErrNoBoundAuthAvailable
 	}
 	// Bound keys keep their own cursor so one key cannot skew another key's rotation.

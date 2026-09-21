@@ -434,6 +434,20 @@ var migrations = []migration{
 			)`,
 		},
 	},
+	{
+		version: 28,
+		name:    "auth fallback settings",
+		up: []string{
+			// Single-row runtime toggle for the API-provider fallback of bound
+			// keys. Database-backed for the same reason as the session affinity
+			// settings above: the console flips it without a host restart.
+			`CREATE TABLE IF NOT EXISTS auth_fallback_settings (
+				id INTEGER PRIMARY KEY CHECK (id = 1),
+				enabled INTEGER NOT NULL DEFAULT 0,
+				updated_at_unix_ms INTEGER NOT NULL
+			)`,
+		},
+	},
 }
 
 // Migrate applies every pending migration transactionally.

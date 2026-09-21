@@ -178,6 +178,51 @@ func updateAuthSessionAffinitySettings(ctx context.Context, svc *service.Service
 	return jsonOKNoStore(sessionAffinityView(updated)), nil
 }
 
+// authFallbackSettingsView is the JSON shape the console renders for the
+// API-provider fallback of bound keys.
+type authFallbackSettingsView struct {
+	Enabled   bool   `json:"enabled"`
+	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+func authFallbackView(settings store.AuthFallbackSettings) authFallbackSettingsView {
+	view := authFallbackSettingsView{Enabled: settings.Enabled}
+	if settings.UpdatedAt != nil {
+		view.UpdatedAt = settings.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	return view
+}
+
+func getAuthFallbackSettings(ctx context.Context, svc *service.Service) (pluginapi.ManagementResponse, error) {
+	settings, err := svc.AuthFallbackSettings(ctx)
+	if err != nil {
+		return jsonErrNoStore(http.StatusServiceUnavailable, "auth fallback settings unavailable"), nil
+	}
+	return jsonOKNoStore(authFallbackView(settings)), nil
+}
+
+func updateAuthFallbackSettings(ctx context.Context, svc *service.Service, body []byte) (pluginapi.ManagementResponse, error) {
+	var req struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return jsonErrNoStore(http.StatusBadRequest, "invalid json"), nil
+	}
+	current, err := svc.AuthFallbackSettings(ctx)
+	if err != nil {
+		return jsonErrNoStore(http.StatusServiceUnavailable, "auth fallback settings unavailable"), nil
+	}
+	// Field-missing means "leave unchanged", mirroring the key update contract.
+	if req.Enabled != nil {
+		current.Enabled = *req.Enabled
+	}
+	updated, err := svc.UpdateAuthFallbackSettings(ctx, current)
+	if err != nil {
+		return jsonErrNoStore(http.StatusBadRequest, err.Error()), nil
+	}
+	return jsonOKNoStore(authFallbackView(updated)), nil
+}
+
 func updateAuthQuotaConcurrency(ctx context.Context, svc *service.Service, body []byte) (pluginapi.ManagementResponse, error) {
 	var req struct {
 		Provider              string `json:"provider"`

@@ -1512,6 +1512,7 @@
     }
     if (tab === 'auth-quotas') {
       loadSessionAffinitySettings().catch(() => {});
+      loadAuthFallbackSettings().catch(() => {});
       await loadAuthQuotas();
       return;
     }    if (tab === 'pricing') {
@@ -5564,6 +5565,55 @@
     }
   }
 
+  // API-provider fallback for bound keys. Global toggle; only a key whose own
+  // bound accounts are all unusable is affected, and only an API provider that
+  // the host already offered for that same request can serve it.
+  function applyAuthFallbackSettings(settings) {
+    const enabled = !!(settings && settings.enabled);
+    const toggle = $('authFallbackEnabled');
+    if (toggle) {
+      toggle.checked = enabled;
+      toggle.disabled = false;
+    }
+    const stateEl = $('authFallbackState');
+    if (stateEl) {
+      stateEl.textContent = enabled ? t('已开启') : t('已关闭');
+      stateEl.title = enabled
+        ? t('绑定 Key 的账号不可用时改用 API 提供商')
+        : t('API 兜底已关闭');
+      stateEl.classList.toggle('is-on', enabled);
+    }
+  }
+
+  async function loadAuthFallbackSettings() {
+    const stateEl = $('authFallbackState');
+    if (stateEl) stateEl.textContent = '读取中…';
+    try {
+      applyAuthFallbackSettings(await api('GET', 'credit-manager/auth-quotas/fallback'));
+    } catch (e) {
+      const toggle = $('authFallbackEnabled');
+      if (toggle) toggle.disabled = true;
+      if (stateEl) stateEl.textContent = '读取失败：' + e.message;
+    }
+  }
+
+  async function saveAuthFallbackSettings(enabled) {
+    const toggle = $('authFallbackEnabled');
+    const stateEl = $('authFallbackState');
+    if (toggle) toggle.disabled = true;
+    if (stateEl) stateEl.textContent = '保存中…';
+    try {
+      applyAuthFallbackSettings(await api('POST', 'credit-manager/auth-quotas/fallback', { enabled }));
+      flash(enabled ? 'API 兜底已开启' : 'API 兜底已关闭', true);
+    } catch (e) {
+      if (toggle) toggle.checked = !enabled;
+      if (stateEl) stateEl.textContent = '保存失败：' + e.message;
+      flash('API 兜底设置保存失败：' + e.message, false);
+    } finally {
+      if (toggle) toggle.disabled = false;
+    }
+  }
+
   function closeAuthWarmupSettings(force) {
     if (state.authWarmupSettingsSaving && !force) return;
     const modal = $('authWarmupSettingsModal');
@@ -5976,6 +6026,9 @@
   });
   $('authSessionAffinityEnabled').addEventListener('change', event => {
     saveSessionAffinitySettings(event.target.checked).catch(e => flash(e.message, false));
+  });
+  $('authFallbackEnabled').addEventListener('change', event => {
+    saveAuthFallbackSettings(event.target.checked).catch(e => flash(e.message, false));
   });
   $('btnCloseAuthWarmupSettings').addEventListener('click', closeAuthWarmupSettings);
   $('btnCancelAuthWarmupSettings').addEventListener('click', closeAuthWarmupSettings);
