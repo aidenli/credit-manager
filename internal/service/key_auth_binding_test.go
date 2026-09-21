@@ -174,20 +174,22 @@ func TestPickAuthForKeyRotatesEachKeyIndependently(t *testing.T) {
 // An account the host has marked error/disabled must never be selected, even
 // though it is still in the candidate list: the status is a snapshot and the
 // account can go bad between list construction and the pick.
-func TestPickAuthForKeySkipsHostMarkedBadAccounts(t *testing.T) {
+// Only an explicit disable fails closed. An advisory "error" flag must NOT black
+// out a key's own account: an account can only clear that flag by serving a
+// request, so honoring it here strands the key on the fallback forever (and, once
+// every account carries the flag, takes the whole provider out of service).
+func TestPickAuthForKeyFailsClosedOnlyForDisabledAccounts(t *testing.T) {
 	ctx := context.Background()
-	cases := []struct {
+	for _, tc := range []struct {
 		name   string
 		status string
 	}{
-		{"error", "error"},
 		{"disabled", "disabled"},
-		{"error with odd casing", "  ERROR "},
-	}
-	for _, tc := range cases {
+		{"disabled with odd casing", "  DISABLED "},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := quotaService(t)
-			key, headers := boundKey(t, s, "bad-status")
+			key, headers := boundKey(t, s, "disabled-status")
 			if err := s.Store().ReplaceKeyAuthBindings(ctx, key.ID, []store.KeyAuthBinding{
 				{Provider: "codex", AuthID: "account-1"},
 			}); err != nil {
@@ -200,6 +202,25 @@ func TestPickAuthForKeySkipsHostMarkedBadAccounts(t *testing.T) {
 				t.Fatalf("status %q must fail closed, got handled=%t err=%v", tc.status, handled, err)
 			}
 		})
+	}
+}
+
+// An errored account is still used when it is all the key has, which is what lets
+// the host's error flag clear again.
+func TestPickAuthForKeyUsesErroredAccountWhenItIsTheOnlyOption(t *testing.T) {
+	s := quotaService(t)
+	ctx := context.Background()
+	key, headers := boundKey(t, s, "errored-only")
+	if err := s.Store().ReplaceKeyAuthBindings(ctx, key.ID, []store.KeyAuthBinding{
+		{Provider: "codex", AuthID: "account-1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	id, handled, err := s.PickAuthForKey(ctx, headers, []AuthPickCandidate{
+		{ID: "account-1", Provider: "codex", Status: "error"},
+	}, "gpt-5")
+	if err != nil || !handled || id != "account-1" {
+		t.Fatalf("pick = (%q, %t, %v), want account-1", id, handled, err)
 	}
 }
 
@@ -249,15 +270,25 @@ func TestPickAuthForKeyAcceptsNonTerminalStatuses(t *testing.T) {
 	}
 }
 
-func TestAuthStatusUnusable(t *testing.T) {
-	for _, status := range []string{"error", "disabled", " ERROR ", "Disabled"} {
-		if !authStatusUnusable(status) {
-			t.Fatalf("status %q should be unusable", status)
+func TestAuthStatusClassification(t *testing.T) {
+	for _, status := range []string{"disabled", " DISABLED "} {
+		if !authStatusDisabled(status) {
+			t.Fatalf("status %q should be a disable", status)
 		}
 	}
-	for _, status := range []string{"", "active", "pending", "refreshing", "unknown", "mystery"} {
-		if authStatusUnusable(status) {
-			t.Fatalf("status %q should stay usable", status)
+	for _, status := range []string{"", "active", "error", "pending", "refreshing", "unknown", "mystery"} {
+		if authStatusDisabled(status) {
+			t.Fatalf("status %q must not be treated as a disable", status)
+		}
+	}
+	for _, status := range []string{"error", " ERROR "} {
+		if !authStatusErrored(status) {
+			t.Fatalf("status %q should be an advisory error", status)
+		}
+	}
+	for _, status := range []string{"", "active", "disabled", "pending", "mystery"} {
+		if authStatusErrored(status) {
+			t.Fatalf("status %q must not be treated as an advisory error", status)
 		}
 	}
 }

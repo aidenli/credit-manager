@@ -217,19 +217,6 @@ func authProviderIsAPI(provider string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(provider)), "openai-compatible")
 }
 
-// authFallbackStatusRejected reports whether a candidate the host already offered
-// must still be skipped as a fallback. Only an explicit disable vetoes one.
-//
-// The bound path rejects "error" too (authStatusUnusable) because it must fail
-// closed rather than serve a key from an account the host called bad. The
-// fallback is the opposite situation: every account the key was granted is
-// already unusable, and an "error" flag on a shared API provider is often stale,
-// since that account can only clear it by serving a request again. A credential
-// in cooldown never reaches this list in the first place.
-func authFallbackStatusRejected(status string) bool {
-	return strings.EqualFold(strings.TrimSpace(status), "disabled")
-}
-
 // pickFallbackAPIAuthLocked chooses the API provider that should serve a bound
 // key whose own accounts are all unavailable. It returns false when the fallback
 // is disabled, when the request offers no usable API provider, or when every
@@ -246,7 +233,7 @@ func (s *Service) pickFallbackAPIAuthLocked(limits map[string]int64, candidates 
 		if !authProviderIsAPI(authLimitProvider(candidate.Provider)) {
 			continue
 		}
-		if strings.TrimSpace(candidate.ID) == "" || authFallbackStatusRejected(candidate.Status) {
+		if strings.TrimSpace(candidate.ID) == "" || authStatusDisabled(candidate.Status) {
 			continue
 		}
 		pool = append(pool, candidate)
@@ -282,7 +269,7 @@ func (s *Service) noBoundAuthError(candidates []AuthPickCandidate) error {
 			continue
 		}
 		api++
-		if !authFallbackStatusRejected(candidate.Status) && strings.TrimSpace(candidate.ID) != "" {
+		if !authStatusDisabled(candidate.Status) && strings.TrimSpace(candidate.ID) != "" {
 			usable++
 		}
 	}

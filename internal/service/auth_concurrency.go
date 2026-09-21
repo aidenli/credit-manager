@@ -21,17 +21,19 @@ type AuthPickCandidate struct {
 	Status string
 }
 
-// authStatusUnusable reports whether the host has already declared this account
-// unfit to serve requests. Only the terminal bad states are rejected: pending and
-// refreshing are transient, and an unrecognised or empty status stays usable
-// because the host filters unusable accounts out before offering candidates.
-func authStatusUnusable(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "error", "disabled":
-		return true
-	default:
-		return false
-	}
+// authStatusDisabled reports whether the host explicitly disabled this credential.
+// It is the only status that vetoes a selection: an explicit disable is operator
+// intent, while everything else the host still offers is usable.
+func authStatusDisabled(status string) bool {
+	return strings.EqualFold(strings.TrimSpace(status), "disabled")
+}
+
+// authStatusErrored reports the host's advisory error flag. It never vetoes a pick,
+// because an account can only clear that flag by serving a request — honoring it
+// would lock the credential out permanently and hand every request of a bound key
+// to the API-provider fallback. A healthy sibling is still preferred.
+func authStatusErrored(status string) bool {
+	return strings.EqualFold(strings.TrimSpace(status), "error")
 }
 
 // ErrNoBoundAuthAvailable fails closed when a key binds OAuth accounts but none
@@ -239,9 +241,11 @@ func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candi
 		if _, ok := bound[provider+"\x00"+id]; !ok {
 			continue
 		}
-		// The host's status is a snapshot taken when the candidate list was built;
-		// the account can go bad before we pick, so re-check it here.
-		if authStatusUnusable(candidate.Status) {
+		// The host's status is a snapshot taken when the candidate list was built.
+		// Only an explicit disable removes an account here; an advisory "error"
+		// flag must not black out a key's own account, so it is handled by
+		// preferring healthy siblings below instead.
+		if authStatusDisabled(candidate.Status) {
 			continue
 		}
 		scoped = append(scoped, candidate)
@@ -281,10 +285,30 @@ func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candi
 	if s.sessionAffinityEnabled() {
 		sessionID = sessionAffinityID(headers)
 	}
-	chosen := s.chooseBoundAuthLocked(key.ID+"\x00"+provider, provider, sessionID, strings.TrimSpace(model), available, time.Now())
+	// A healthy sibling wins over an account the host flagged, but a flagged
+	// account stays selectable when it is all the key has: otherwise the flag can
+	// never clear (only serving a request clears it) and the key would sit on the
+	// API-provider fallback forever.
+	pickFrom := available
+	if healthy := withoutErroredAuths(available); len(healthy) > 0 {
+		pickFrom = healthy
+	}
+	chosen := s.chooseBoundAuthLocked(key.ID+"\x00"+provider, provider, sessionID, strings.TrimSpace(model), pickFrom, time.Now())
 	s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: strings.TrimSpace(chosen.ID), Provider: chosen.Provider})
 	s.authMu.Unlock()
 	return strings.TrimSpace(chosen.ID), true, nil
+}
+
+// withoutErroredAuths returns the candidates the host did not flag as errored.
+func withoutErroredAuths(candidates []AuthPickCandidate) []AuthPickCandidate {
+	out := make([]AuthPickCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if authStatusErrored(candidate.Status) {
+			continue
+		}
+		out = append(out, candidate)
+	}
+	return out
 }
 
 // filterAvailableAuthLocked drops candidates that are warmup-held or already at

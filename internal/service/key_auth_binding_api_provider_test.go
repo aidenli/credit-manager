@@ -100,8 +100,8 @@ func TestPickAuthForKeyRotatesAcrossOAuthAndAPIProvider(t *testing.T) {
 	t.Logf("rotation across mixed providers: %#v", seen)
 }
 
-// A bound API-key account that the host marks error must be skipped just like an
-// OAuth account.
+// A bound API-key account the host explicitly disabled must fail closed, exactly
+// like a disabled OAuth account.
 func TestPickAuthForKeySkipsBadAPIKeyProvider(t *testing.T) {
 	s := quotaService(t)
 	ctx := context.Background()
@@ -112,9 +112,9 @@ func TestPickAuthForKeySkipsBadAPIKeyProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, handled, err := s.PickAuthForKey(ctx, headers, []AuthPickCandidate{
-		{ID: "openai-compatibility:agnes:4dab06a22e06", Provider: "openai-compatible-agnes", Status: "error"},
+		{ID: "openai-compatibility:agnes:4dab06a22e06", Provider: "openai-compatible-agnes", Status: "disabled"},
 	}, "agnes-3.0-flash")
 	if !handled || err == nil {
-		t.Fatalf("bad compat account must fail closed, got handled=%t err=%v", handled, err)
+		t.Fatalf("disabled compat account must fail closed, got handled=%t err=%v", handled, err)
 	}
 }
