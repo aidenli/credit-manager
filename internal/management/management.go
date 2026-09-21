@@ -45,6 +45,8 @@ func Routes() []pluginapi.ManagementRoute {
 		{http.MethodPost, "credit-manager/auth-quotas/warmup/settings"},
 		{http.MethodGet, "credit-manager/auth-quotas/session-affinity"},
 		{http.MethodPost, "credit-manager/auth-quotas/session-affinity"},
+		{http.MethodGet, "credit-manager/auth-quotas/fallback"},
+		{http.MethodPost, "credit-manager/auth-quotas/fallback"},
 		{http.MethodGet, "credit-manager/auth-accounts"},
 		{http.MethodPost, "credit-manager/auth-quotas/concurrency"},
 		{http.MethodPost, "credit-manager/auth-quotas/concurrency/batch"},

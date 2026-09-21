@@ -145,6 +145,26 @@ func TestAuthFallbackViewCarriesCountersAndLastHit(t *testing.T) {
 	}
 }
 
+// The host only forwards management paths the plugin declares at registration.
+// A route that is handled but not declared answers 404 from the host, which is
+// exactly how the fallback endpoint shipped broken once.
+func TestAuthQuotaFallbackRoutesAreDeclared(t *testing.T) {
+	declared := map[string]bool{}
+	for _, route := range Routes() {
+		declared[route.Method+" "+route.Path] = true
+	}
+	for _, want := range []string{
+		"GET credit-manager/auth-quotas/fallback",
+		"POST credit-manager/auth-quotas/fallback",
+		"GET credit-manager/auth-quotas/session-affinity",
+		"POST credit-manager/auth-quotas/session-affinity",
+	} {
+		if !declared[want] {
+			t.Fatalf("management route %q is not declared to the host", want)
+		}
+	}
+}
+
 func TestConsoleExposesAuthFallbackToggle(t *testing.T) {
 	page := strings.ReplaceAll(string(consolePage().Body), "\r\n", "\n")
 	for _, text := range []string{
@@ -156,6 +176,7 @@ func TestConsoleExposesAuthFallbackToggle(t *testing.T) {
 		"credit-manager/auth-quotas/fallback",
 		"API 兜底（绑定 Key）",
 		"settings.hits_total",
+		`class="auth-quota-switches"`,
 	} {
 		if !strings.Contains(page, text) {
 			t.Fatalf("console is missing the API fallback toggle: %q", text)

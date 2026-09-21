@@ -1003,15 +1003,19 @@ html[data-palette="dark"] .empty-state { background:linear-gradient(135deg, #242
 html[data-palette="dark"] .chart-empty-icon { background:#2a2723; border-color:#49433c; color:#b9b1a7; }
 html[data-palette="light"] .chart-empty-icon { background:#eeece6; border-color:#d8d4cc; color:#756e66; }
 html[data-palette="dark"] .overview-guide { background:linear-gradient(145deg, #211e1b, #39332d); border-color:#39332d; }
-.page-intro { display:flex; justify-content:space-between; align-items:center; gap:18px; margin-bottom:18px; }
+.page-intro { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:18px; margin-bottom:18px; }
+/* The auth-quotas toolbar can be wider than the space left next to the intro
+   text, which would otherwise squeeze this CJK paragraph to one character per
+   line. Reserving a minimum width makes the toolbar wrap to its own row instead. */
+.page-intro > div:first-child { flex:1 1 320px; min-width:260px; }
 .page-intro h2 { margin:0; font-size:1.25rem; letter-spacing:-.025em; }
 .page-intro p { margin:5px 0 0; color:var(--muted); font-size:.82rem; }
 .page-intro .actions { align-items:center; flex-shrink:0; }
 .page-intro .badge { white-space:nowrap; }
-.auth-quota-toolbar { display:flex; align-items:flex-end; gap:12px; flex-shrink:0; flex-wrap:wrap; justify-content:flex-end; }
+.auth-quota-toolbar { display:flex; align-items:flex-end; gap:12px; flex:1 1 100%; min-width:0; flex-wrap:wrap; justify-content:flex-end; }
 .auth-quota-toolbar > .btn { flex:0 0 auto; min-height:38px; }
-.auth-quota-toolbar-filters { display:flex; align-items:end; gap:10px; flex:0 1 auto; min-width:0; }
-.auth-quota-batch { display:flex; align-items:flex-end; gap:8px; flex:0 1 auto; min-width:0; }
+.auth-quota-toolbar-filters { display:flex; align-items:end; gap:10px; flex:0 0 auto; min-width:0; }
+.auth-quota-batch { display:flex; align-items:flex-end; gap:8px; flex:0 0 auto; min-width:0; }
 .auth-quota-batch .auth-quota-filter { width:112px; }
 .auth-quota-batch .btn { min-height:38px; white-space:nowrap; }
 .auth-quota-filter { display:grid; gap:4px; min-width:0; }
@@ -1024,6 +1028,11 @@ html[data-palette="dark"] .overview-guide { background:linear-gradient(145deg, #
    not shrink below its content, otherwise the label overlaps the neighbouring
    "批量并发" field. */
 .auth-quota-switch { display:grid; gap:4px; min-width:0; box-sizing:border-box; flex:0 0 auto; width:280px; }
+/* The two runtime toggles are grouped so the toolbar wraps them as one unit. As
+   separate fixed-width items they overran the row and the batch controls (the
+   only shrinkable group) collapsed into the field next to them. */
+.auth-quota-switches { display:flex; align-items:flex-end; gap:12px; flex:1 1 auto; min-width:0; flex-wrap:wrap; }
+.auth-quota-switches .auth-quota-switch { flex:1 1 230px; width:auto; min-width:190px; max-width:300px; }
 .auth-quota-switch-label { color:var(--muted); font-size:.72rem; font-weight:650; letter-spacing:.04em; white-space:nowrap; }
 .auth-quota-switch-row { display:flex; align-items:center; gap:8px; min-height:38px; padding:0 10px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
 .auth-quota-switch-state { min-width:0; overflow:hidden; color:var(--muted); font-size:.72rem; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
