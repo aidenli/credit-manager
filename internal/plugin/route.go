@@ -16,7 +16,7 @@ func routeModel(raw []byte) ([]byte, error) {
 	}
 	// Host HostModelExecute rejects image-only models. Let the native
 	// /v1/images/* path run; interceptors reserve and settle instead.
-	if isNativeImageProtocol(req.SourceFormat) || isImageOnlyModel(req.RequestedModel) {
+	if isNativeImageProtocol(req.SourceFormat) || service.IsImageOnlyModel(req.RequestedModel) {
 		return okEnvelope(pluginapi.ModelRouteResponse{Handled: false, Reason: "native_image_protocol"})
 	}
 	// Only handle authenticated plugin-key traffic; exclusive auth already rejected others.
@@ -46,16 +46,4 @@ func isNativeImageProtocol(format string) bool {
 	default:
 		return false
 	}
-}
-
-func isImageOnlyModel(model string) bool {
-	model = strings.ToLower(strings.TrimSpace(model))
-	// Image families keep multiplying (gpt-image-1, 1.5, 2, 2.5, 2.5-flare, …), so
-	// match the family prefix. An allow-list silently falls behind, and a model it
-	// misses reaches a text-only path: the native /v1/images route is bypassed and
-	// the host's model-execute callback refuses the request.
-	if strings.HasPrefix(model, "gpt-image-") {
-		return true
-	}
-	return strings.Contains(model, "imagine-image") || strings.Contains(model, "imagine-video")
 }

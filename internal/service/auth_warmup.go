@@ -248,7 +248,13 @@ func (s *Service) warmupAuthQuota(ctx context.Context, callback, provider, authI
 		return item, errors.New("auth quota warmup requires a fresh quota snapshot")
 	}
 	identity := store.AuthIdentity{AuthID: item.AuthID, AuthIndex: item.AuthIndex, Provider: item.Provider, Name: item.DisplayName}
-	models := shuffleAuthWarmupModels(schedule.Models)
+	models := uniqueAuthWarmupModels(schedule.Models)
+	// One model per warmup. Requesting every model the account offers sends one
+	// upstream call per model to every selected account at once, and that burst is
+	// what makes the provider answer 502/overloaded to several accounts together.
+	if selected := pickAuthWarmupModel(models); selected != "" {
+		models = []string{selected}
+	}
 	if len(models) == 0 {
 		return item, errors.New("auth quota warmup has no selected model")
 	}
@@ -308,6 +314,29 @@ func warmupStoreContext(ctx context.Context) context.Context {
 }
 
 var ErrAuthWarmupModelUnavailable = errors.New("warmup target does not support a selected model")
+
+// authWarmupPreferredModel is the model a warmup uses when the account offers it.
+// Any single model refreshes the quota window, so the preferred one keeps warmups
+// comparable across accounts instead of depending on the account's model order.
+const authWarmupPreferredModel = "gpt-5.6-sol"
+
+// pickAuthWarmupModel narrows a warmup model list to the one model that will be
+// requested: the preferred model when the account offers it, otherwise the first
+// model that is not image-only. It returns "" when nothing is warmable, and the
+// caller then keeps the original list so the run is recorded as unsupported.
+func pickAuthWarmupModel(models []string) string {
+	for _, model := range models {
+		if strings.EqualFold(strings.TrimSpace(model), authWarmupPreferredModel) {
+			return strings.TrimSpace(model)
+		}
+	}
+	for _, model := range models {
+		if model = strings.TrimSpace(model); model != "" && !IsImageOnlyModel(model) {
+			return model
+		}
+	}
+	return ""
+}
 
 // AuthWarmupUpstreamStatusError carries the HTTP status a warmup request received
 // from the host. Without it every unrecognised status collapses into

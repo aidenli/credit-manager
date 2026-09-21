@@ -53,6 +53,57 @@ func TestWarmupAuthQuotaIsClaimedAndSeparateFromCustomerBilling(t *testing.T) {
 	}
 }
 
+// A warmup must request exactly one model: firing every model at every account is
+// what turns a warmup batch into a burst of upstream 502s.
+func TestWarmupAuthQuotaRequestsOnlyOneModel(t *testing.T) {
+	s := quotaService(t)
+	src := &fakeQuotaSource{
+		files: []AuthQuotaFile{{ID: "auth-1", AuthIndex: "idx-1", Provider: "codex", Label: "ops"}},
+		auth:  quotaJSON("codex"),
+		responses: map[string]string{
+			"chatgpt.com": `{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":25,"limit_window_seconds":3600,"reset_at":4102444800}}}`,
+		},
+	}
+	s.SetAuthQuotaSource(src)
+	executor := &fakeAuthWarmupExecutor{result: AuthWarmupResult{Model: "gpt-5.6-sol", Usage: money.TokenUsage{Input: 2, Output: 1}}}
+	s.SetAuthWarmupExecutor(executor)
+
+	// The account's model list arrives sorted, so the preferred model is not first.
+	offered := []string{"codex-auto-review", "gpt-5.5", "gpt-5.6-sol", "gpt-image-2.5"}
+	if _, err := s.WarmupAuthQuota(context.Background(), "codex", "auth-1", "idx-1", offered); err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.calls) != 1 {
+		t.Fatalf("warmup calls = %d, want 1", len(executor.calls))
+	}
+	got := executor.calls[0].Models
+	if len(got) != 1 || got[0] != "gpt-5.6-sol" {
+		t.Fatalf("warmup models = %#v, want exactly gpt-5.6-sol", got)
+	}
+}
+
+func TestPickAuthWarmupModel(t *testing.T) {
+	cases := []struct {
+		name   string
+		models []string
+		want   string
+	}{
+		{"preferred wins over order", []string{"codex-auto-review", "gpt-5.5", "gpt-5.6-sol"}, "gpt-5.6-sol"},
+		{"preferred is case insensitive", []string{"GPT-5.6-SOL"}, "GPT-5.6-SOL"},
+		{"falls back to first warmable", []string{"codex-auto-review", "gpt-5.5"}, "codex-auto-review"},
+		{"skips image models", []string{"gpt-image-2.5", "gpt-5.5"}, "gpt-5.5"},
+		{"only image models", []string{"gpt-image-2.5-sunburst"}, ""},
+		{"empty", nil, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pickAuthWarmupModel(tc.models); got != tc.want {
+				t.Fatalf("pickAuthWarmupModel(%#v) = %q, want %q", tc.models, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestWarmupScheduleKeysAreIndependent(t *testing.T) {
 	schedules := []store.AuthWarmupSchedule{
 		{ID: "codex", Auths: []store.AuthWarmupAuthTarget{{Provider: "codex", AuthID: "auth-codex", AuthIndex: "idx-codex"}}, Models: []string{"gpt-5.6-luna"}},

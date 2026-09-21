@@ -65,7 +65,7 @@ func (hostAuthWarmupExecutor) ExecuteAuthWarmup(ctx context.Context, request ser
 		// routeModel relies on), so warming one can only ever fail. Skip it: the run is
 		// then recorded as "skipped" instead of blaming the account for a request the
 		// host never forwards.
-		if isImageOnlyModel(model) {
+		if service.IsImageOnlyModel(model) {
 			continue
 		}
 		nonce, err := newWarmupNonce()

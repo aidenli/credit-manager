@@ -97,12 +97,12 @@ func TestIsImageOnlyModelMatchesWholeGptImageFamily(t *testing.T) {
 		"gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst",
 		"GPT-IMAGE-2.5", " grok-imagine-image ", "grok-imagine-video",
 	} {
-		if !isImageOnlyModel(model) {
+		if !service.IsImageOnlyModel(model) {
 			t.Fatalf("%q must be treated as image-only", model)
 		}
 	}
 	for _, model := range []string{"gpt-5.6-sol", "gpt-5.5", "gpt-6-astra", "codex-auto-review", ""} {
-		if isImageOnlyModel(model) {
+		if service.IsImageOnlyModel(model) {
 			t.Fatalf("%q must not be treated as image-only", model)
 		}
 	}

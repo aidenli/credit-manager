@@ -72,7 +72,7 @@ func interceptRequestAfterAuth(raw []byte) ([]byte, error) {
 	}
 	ctx := context.Background()
 	key, _, err := svc.ResolveIdentity(ctx, req.Headers, req.Metadata)
-	if !isNativeImageProtocol(req.SourceFormat) && !isImageOnlyModel(firstNonEmpty(req.RequestedModel, req.Model)) {
+	if !isNativeImageProtocol(req.SourceFormat) && !service.IsImageOnlyModel(firstNonEmpty(req.RequestedModel, req.Model)) {
 		// CPA invokes this hook before its executor. Carry the lifecycle request ID
 		// into our executor, then remove it before the nested host model call.
 		if err == nil && req.Stream {
