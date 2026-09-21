@@ -61,6 +61,13 @@ func (hostAuthWarmupExecutor) ExecuteAuthWarmup(ctx context.Context, request ser
 		if model == "" {
 			continue
 		}
+		// The host's model-execute callback refuses image-only models (the same rule
+		// routeModel relies on), so warming one can only ever fail. Skip it: the run is
+		// then recorded as "skipped" instead of blaming the account for a request the
+		// host never forwards.
+		if isImageOnlyModel(model) {
+			continue
+		}
 		nonce, err := newWarmupNonce()
 		if err != nil {
 			return service.AuthWarmupResult{}, err
@@ -96,18 +103,22 @@ func (hostAuthWarmupExecutor) ExecuteAuthWarmup(ctx context.Context, request ser
 
 // warmupResponseError retains only safe, actionable upstream classifications.
 // Never persist opaque provider bodies because they can contain request context.
+// The status travels with the error so the run records what was actually refused
+// (status_503, status_400, …) instead of a blanket execution_failed.
 func warmupResponseError(status int, body []byte) error {
 	message := strings.ToLower(string(body))
+	detail := ""
 	switch {
 	case strings.Contains(message, "missing api key"):
-		return errors.New("warmup request missing API key")
+		detail = "warmup request missing API key"
 	case strings.Contains(message, "unauthorized"), status == http.StatusUnauthorized:
-		return errors.New("warmup request unauthorized")
+		detail = "warmup request unauthorized"
 	case strings.Contains(message, "rate limit"), status == http.StatusTooManyRequests:
-		return errors.New("warmup request rate limited")
+		detail = "warmup request rate limited"
 	default:
-		return fmt.Errorf("warmup request returned status %d", status)
+		detail = fmt.Sprintf("warmup request returned status %d", status)
 	}
+	return &service.AuthWarmupUpstreamStatusError{Status: status, Message: detail}
 }
 
 func isWarmupTargetUnavailable(err error) bool {

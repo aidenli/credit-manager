@@ -50,10 +50,12 @@ func isNativeImageProtocol(format string) bool {
 
 func isImageOnlyModel(model string) bool {
 	model = strings.ToLower(strings.TrimSpace(model))
-	switch model {
-	case "gpt-image-1", "gpt-image-1.5", "gpt-image-2", "grok-imagine-image", "grok-imagine-image-quality":
+	// Image families keep multiplying (gpt-image-1, 1.5, 2, 2.5, 2.5-flare, …), so
+	// match the family prefix. An allow-list silently falls behind, and a model it
+	// misses reaches a text-only path: the native /v1/images route is bypassed and
+	// the host's model-execute callback refuses the request.
+	if strings.HasPrefix(model, "gpt-image-") {
 		return true
-	default:
-		return strings.Contains(model, "imagine-image") || strings.Contains(model, "imagine-video")
 	}
+	return strings.Contains(model, "imagine-image") || strings.Contains(model, "imagine-video")
 }

@@ -309,6 +309,25 @@ func warmupStoreContext(ctx context.Context) context.Context {
 
 var ErrAuthWarmupModelUnavailable = errors.New("warmup target does not support a selected model")
 
+// AuthWarmupUpstreamStatusError carries the HTTP status a warmup request received
+// from the host. Without it every unrecognised status collapses into
+// execution_failed, which hides whether the host refused the request before it
+// reached any account or the account itself answered badly.
+type AuthWarmupUpstreamStatusError struct {
+	Status  int
+	Message string
+}
+
+func (e *AuthWarmupUpstreamStatusError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if message := strings.TrimSpace(e.Message); message != "" {
+		return message
+	}
+	return fmt.Sprintf("warmup request returned status %d", e.Status)
+}
+
 func (s *Service) disableOnceAuthWarmupSchedule(ctx context.Context, schedule store.AuthWarmupSchedule) {
 	if s == nil || s.store == nil || store.AuthWarmupFrequency(schedule.Frequency) != store.AuthWarmupFrequencyOnce {
 		return
@@ -494,6 +513,8 @@ func authWarmupErrorCode(err error) string {
 		return "timeout"
 	case errors.Is(err, context.Canceled):
 		return "canceled"
+	case errors.Is(err, ErrAuthWarmupModelUnavailable):
+		return "unsupported_model"
 	case strings.Contains(message, "missing api key"):
 		return "missing_api_key"
 	case strings.Contains(message, "unauthorized"), strings.Contains(message, "401"):
@@ -502,9 +523,12 @@ func authWarmupErrorCode(err error) string {
 		return "rate_limited"
 	case strings.Contains(message, "target unavailable"):
 		return "target_unavailable"
-	default:
-		return "execution_failed"
 	}
+	var statusErr *AuthWarmupUpstreamStatusError
+	if errors.As(err, &statusErr) && statusErr != nil && statusErr.Status > 0 {
+		return fmt.Sprintf("status_%d", statusErr.Status)
+	}
+	return "execution_failed"
 }
 
 func authWarmupProviderErrorCode(provider string, err error) string {

@@ -142,6 +142,42 @@ func TestAuthWarmupProviderErrorCodeIdentifiesOpaqueXAIFailure(t *testing.T) {
 	}
 }
 
+// A warmup failure must record the HTTP status it was refused with, otherwise a
+// host-side rejection and a broken account are indistinguishable in the run table.
+func TestAuthWarmupErrorCodeRecordsUpstreamStatus(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"service unavailable", &AuthWarmupUpstreamStatusError{Status: 503, Message: "warmup request returned status 503"}, "status_503"},
+		{"bad request", &AuthWarmupUpstreamStatusError{Status: 400}, "status_400"},
+		{"image only model", ErrAuthWarmupModelUnavailable, "unsupported_model"},
+		{"unauthorized keeps its own code", &AuthWarmupUpstreamStatusError{Status: 401, Message: "warmup request unauthorized"}, "unauthorized"},
+		{"rate limited keeps its own code", &AuthWarmupUpstreamStatusError{Status: 429, Message: "warmup request rate limited"}, "rate_limited"},
+		{"unknown error", errors.New("model execution failed"), "execution_failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := authWarmupErrorCode(tc.err); got != tc.want {
+				t.Fatalf("error code = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A status-bearing error still renders the actionable message, not the number.
+func TestAuthWarmupUpstreamStatusErrorMessage(t *testing.T) {
+	err := &AuthWarmupUpstreamStatusError{Status: 503, Message: "warmup request returned status 503"}
+	if err.Error() != "warmup request returned status 503" {
+		t.Fatalf("message = %q", err.Error())
+	}
+	bare := &AuthWarmupUpstreamStatusError{Status: 502}
+	if bare.Error() != "warmup request returned status 502" {
+		t.Fatalf("bare message = %q", bare.Error())
+	}
+}
+
 func TestWarmupStoreContextSurvivesSchedulerCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

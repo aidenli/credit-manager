@@ -81,4 +81,74 @@ func TestWarmupResponseErrorClassifiesMissingAPIKey(t *testing.T) {
 	if err == nil || err.Error() != "warmup request missing API key" {
 		t.Fatalf("warmup response error = %v", err)
 	}
+	// The status must survive classification: it is the only way a run can record
+	// whether the host refused the request or the account answered badly.
+	var statusErr *service.AuthWarmupUpstreamStatusError
+	if !errors.As(err, &statusErr) || statusErr.Status != http.StatusUnauthorized {
+		t.Fatalf("status = %#v", statusErr)
+	}
+}
+
+// The whole gpt-image family is image-only, including releases that appeared after
+// the previous allow-list was written.
+func TestIsImageOnlyModelMatchesWholeGptImageFamily(t *testing.T) {
+	for _, model := range []string{
+		"gpt-image-1", "gpt-image-1.5", "gpt-image-2",
+		"gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst",
+		"GPT-IMAGE-2.5", " grok-imagine-image ", "grok-imagine-video",
+	} {
+		if !isImageOnlyModel(model) {
+			t.Fatalf("%q must be treated as image-only", model)
+		}
+	}
+	for _, model := range []string{"gpt-5.6-sol", "gpt-5.5", "gpt-6-astra", "codex-auto-review", ""} {
+		if isImageOnlyModel(model) {
+			t.Fatalf("%q must not be treated as image-only", model)
+		}
+	}
+}
+
+// Image models cannot be warmed through the host's model-execute callback, so the
+// run must skip them rather than report a failure for every account.
+func TestWarmupSkipsImageOnlyModels(t *testing.T) {
+	oldHost := HostCall
+	defer func() { HostCall = oldHost }()
+	attempts := 0
+	HostCall = func(method string, raw []byte) ([]byte, int, error) {
+		if method != pluginabi.MethodHostModelExecute {
+			return nil, 0, errors.New("unexpected host call")
+		}
+		attempts++
+		encoded, err := okEnvelope(pluginapi.HostModelExecutionResponse{StatusCode: http.StatusOK, Body: []byte(`{"usage":{"prompt_tokens":2,"completion_tokens":1}}`)})
+		return encoded, 0, err
+	}
+	result, err := (hostAuthWarmupExecutor{}).ExecuteAuthWarmup(context.Background(), service.AuthWarmupRequest{
+		RunID: "run", Auth: store.AuthIdentity{AuthID: "auth-1", Provider: "codex"},
+		Models: []string{"gpt-image-2.5", "gpt-image-2", "gpt-5.6-luna"}, EntryProtocol: "openai", RequestedAt: time.Now(),
+	})
+	if err != nil || attempts != 1 || result.Model != "gpt-5.6-luna" {
+		t.Fatalf("result=%#v attempts=%d err=%v", result, attempts, err)
+	}
+}
+
+// Selecting only image models is reported as unsupported, which the service records
+// as "skipped" instead of "failed".
+func TestWarmupReportsImageOnlySelectionAsUnsupported(t *testing.T) {
+	oldHost := HostCall
+	defer func() { HostCall = oldHost }()
+	attempts := 0
+	HostCall = func(method string, raw []byte) ([]byte, int, error) {
+		attempts++
+		return nil, 0, errors.New("unexpected host call")
+	}
+	_, err := (hostAuthWarmupExecutor{}).ExecuteAuthWarmup(context.Background(), service.AuthWarmupRequest{
+		RunID: "run", Auth: store.AuthIdentity{AuthID: "auth-1", Provider: "codex"},
+		Models: []string{"gpt-image-2.5-sunburst"}, EntryProtocol: "openai", RequestedAt: time.Now(),
+	})
+	if !errors.Is(err, service.ErrAuthWarmupModelUnavailable) {
+		t.Fatalf("err = %v", err)
+	}
+	if attempts != 0 {
+		t.Fatalf("image-only selection made %d host calls, want 0", attempts)
+	}
 }
