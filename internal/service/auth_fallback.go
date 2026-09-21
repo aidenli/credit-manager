@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -215,6 +217,19 @@ func authProviderIsAPI(provider string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(provider)), "openai-compatible")
 }
 
+// authFallbackStatusRejected reports whether a candidate the host already offered
+// must still be skipped as a fallback. Only an explicit disable vetoes one.
+//
+// The bound path rejects "error" too (authStatusUnusable) because it must fail
+// closed rather than serve a key from an account the host called bad. The
+// fallback is the opposite situation: every account the key was granted is
+// already unusable, and an "error" flag on a shared API provider is often stale,
+// since that account can only clear it by serving a request again. A credential
+// in cooldown never reaches this list in the first place.
+func authFallbackStatusRejected(status string) bool {
+	return strings.EqualFold(strings.TrimSpace(status), "disabled")
+}
+
 // pickFallbackAPIAuthLocked chooses the API provider that should serve a bound
 // key whose own accounts are all unavailable. It returns false when the fallback
 // is disabled, when the request offers no usable API provider, or when every
@@ -231,7 +246,7 @@ func (s *Service) pickFallbackAPIAuthLocked(limits map[string]int64, candidates 
 		if !authProviderIsAPI(authLimitProvider(candidate.Provider)) {
 			continue
 		}
-		if strings.TrimSpace(candidate.ID) == "" || authStatusUnusable(candidate.Status) {
+		if strings.TrimSpace(candidate.ID) == "" || authFallbackStatusRejected(candidate.Status) {
 			continue
 		}
 		pool = append(pool, candidate)
@@ -246,4 +261,43 @@ func (s *Service) pickFallbackAPIAuthLocked(limits map[string]int64, candidates 
 		return AuthPickCandidate{}, false
 	}
 	return s.nextAuthPickLocked(authPickScopeFallback, available), true
+}
+
+// noBoundAuthError keeps the fail-closed sentinel but appends what the plugin
+// actually saw. The plugin has no logger of its own, so the host log line
+// "scheduler rejected auth pick" is the only diagnostic channel available, and
+// without these counters a declined fallback is indistinguishable from a
+// disabled one.
+func (s *Service) noBoundAuthError(candidates []AuthPickCandidate) error {
+	api, usable := 0, 0
+	providers := make([]string, 0, 4)
+	seen := map[string]int{}
+	for _, candidate := range candidates {
+		provider := authLimitProvider(candidate.Provider)
+		if provider == "" {
+			provider = "<empty>"
+		}
+		seen[provider]++
+		if !authProviderIsAPI(provider) {
+			continue
+		}
+		api++
+		if !authFallbackStatusRejected(candidate.Status) && strings.TrimSpace(candidate.ID) != "" {
+			usable++
+		}
+	}
+	for provider, count := range seen {
+		if len(providers) == cap(providers) {
+			providers = append(providers, "…")
+			break
+		}
+		providers = append(providers, fmt.Sprintf("%s:%d", provider, count))
+	}
+	sort.Strings(providers)
+	state := "enabled"
+	if !s.authFallbackEnabled() {
+		state = "disabled"
+	}
+	return fmt.Errorf("%w [fallback=%s candidates=%d api=%d usable=%d providers=%s]",
+		ErrNoBoundAuthAvailable, state, len(candidates), api, usable, strings.Join(providers, " "))
 }

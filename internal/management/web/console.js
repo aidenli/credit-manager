@@ -5581,13 +5581,16 @@
     const stateEl = $('authFallbackState');
     if (stateEl) {
       let text = enabled ? t('已开启') : t('已关闭');
-      if (total > 0) {
+      // Show the count whenever the feature is on, so "no hits yet" is readable
+      // instead of looking like the counter is missing.
+      if (enabled || total > 0) {
         text += ' · ' + t('兜底') + ' ' + total + ' ' + t('次');
         if (recent > 0) text += ' (' + t('24 小时') + ' ' + recent + ')';
       }
       stateEl.textContent = text;
       const lines = [];
       lines.push(enabled ? t('绑定 Key 的账号不可用时改用 API 提供商') : t('API 兜底已关闭'));
+      lines.push(t('只在请求候选里已有 API 提供商时生效（如 agnes），且优先用完绑定账号'));
       if (last) {
         const who = last.label || last.plugin_key_id || '-';
         const where = [last.provider, last.model].filter(Boolean).join(' / ');

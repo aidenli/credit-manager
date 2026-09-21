@@ -198,4 +198,9 @@ func TestConsoleExposesAuthFallbackToggle(t *testing.T) {
 	if !strings.Contains(page, `$('authFallbackEnabled').addEventListener('change'`) {
 		t.Fatal("console does not wire the API fallback toggle")
 	}
+	// The counter must render whenever the feature is on, so an operator looking
+	// for it sees "兜底 0 次" instead of nothing.
+	if !strings.Contains(page, "if (enabled || total > 0)") {
+		t.Fatal("console hides the fallback counter while the feature is enabled")
+	}
 }

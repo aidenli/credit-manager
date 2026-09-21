@@ -272,7 +272,7 @@ func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candi
 			return fallbackID, true, nil
 		}
 		s.authMu.Unlock()
-		return "", true, ErrNoBoundAuthAvailable
+		return "", true, s.noBoundAuthError(candidates)
 	}
 	// Bound keys keep their own cursor so one key cannot skew another key's rotation.
 	// With session affinity enabled the session, not the key, decides the account.

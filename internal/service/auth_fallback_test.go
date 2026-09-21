@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/yuluo688/credit-manager/internal/store"
@@ -86,23 +87,45 @@ func TestPickAuthForKeyFallbackIgnoresNonAPICandidates(t *testing.T) {
 	}
 }
 
-// An API provider the host already declared unusable must not be selected.
-func TestPickAuthForKeyFallbackSkipsUnusableAPIProvider(t *testing.T) {
+// A disabled API provider is an explicit operator decision and must not be used.
+// An "error" one is different: it is usually stale, and only a served request can
+// clear it, so the fallback still uses it (the host drops cooling credentials
+// before offering candidates, which is the real protection).
+func TestPickAuthForKeyFallbackSkipsDisabledAPIProvider(t *testing.T) {
+	s := fallbackService(t, true)
 	ctx := context.Background()
-	for _, status := range []string{"error", "disabled"} {
-		t.Run(status, func(t *testing.T) {
-			s := fallbackService(t, true)
-			key, headers := boundKey(t, s, "bad-api")
-			bindOneAccount(t, s, key.ID, "account-9")
+	key, headers := boundKey(t, s, "disabled-api")
+	bindOneAccount(t, s, key.ID, "account-9")
 
-			_, handled, err := s.PickAuthForKey(ctx, headers, []AuthPickCandidate{
-				{ID: "account-1", Provider: "codex"},
-				{ID: apiAccount1, Provider: apiProvider, Status: status},
-			}, "gpt-5.6-sol")
-			if !handled || !errors.Is(err, ErrNoBoundAuthAvailable) {
-				t.Fatalf("unusable api pick = handled:%t err:%v", handled, err)
-			}
-		})
+	_, handled, err := s.PickAuthForKey(ctx, headers, []AuthPickCandidate{
+		{ID: "account-1", Provider: "codex"},
+		{ID: apiAccount1, Provider: apiProvider, Status: "disabled"},
+	}, "gpt-5.6-sol")
+	if !handled || !errors.Is(err, ErrNoBoundAuthAvailable) {
+		t.Fatalf("disabled api pick = handled:%t err:%v", handled, err)
+	}
+}
+
+func TestPickAuthForKeyFallbackUsesErroredAPIProvider(t *testing.T) {
+	s := fallbackService(t, true)
+	ctx := context.Background()
+	key, headers := boundKey(t, s, "errored-api")
+	bindOneAccount(t, s, key.ID, "account-9")
+
+	id, handled, err := s.PickAuthForKey(ctx, headers, []AuthPickCandidate{
+		{ID: "account-1", Provider: "codex"},
+		{ID: apiAccount1, Provider: apiProvider, Status: "error"},
+	}, "gpt-5.6-sol")
+	if err != nil || !handled || id != apiAccount1 {
+		t.Fatalf("errored api pick = (%q, %t, %v)", id, handled, err)
+	}
+	// It is still recorded, so the operator sees the fallback spending money.
+	status, err := s.AuthFallbackStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.TotalHits != 1 {
+		t.Fatalf("hits = %d", status.TotalHits)
 	}
 }
 
@@ -356,6 +379,33 @@ func TestPickAuthForKeyDoesNotRecordWithoutFallback(t *testing.T) {
 	}
 	if status.TotalHits != 0 || status.LastHit != nil {
 		t.Fatalf("unexpected hits recorded: %#v", status)
+	}
+}
+
+// The fail-closed error is the only diagnostic channel the plugin has: the host
+// logs it. It must keep the sentinel while carrying what the plugin actually saw,
+// otherwise a declined fallback is indistinguishable from a disabled one.
+func TestNoBoundAuthErrorCarriesDiagnostics(t *testing.T) {
+	s := fallbackService(t, true)
+	err := s.noBoundAuthError([]AuthPickCandidate{
+		{ID: "account-1", Provider: "codex"},
+		{ID: apiAccount1, Provider: apiProvider, Status: "disabled"},
+	})
+	if !errors.Is(err, ErrNoBoundAuthAvailable) {
+		t.Fatalf("diagnostic error does not wrap the sentinel: %v", err)
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"fallback=enabled", "candidates=2", "api=1", "usable=0",
+		"codex:1", "openai-compatible-agnes:1",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("diagnostic %q is missing %q", msg, want)
+		}
+	}
+	s.setAuthFallbackRuntime(false)
+	if msg := s.noBoundAuthError(nil).Error(); !strings.Contains(msg, "fallback=disabled") {
+		t.Fatalf("disabled diagnostic = %q", msg)
 	}
 }
 
