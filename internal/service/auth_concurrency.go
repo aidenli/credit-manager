@@ -439,8 +439,17 @@ func authLimitIdentity(auth store.AuthIdentity) (provider, authID string) {
 }
 
 func authLimitProvider(provider string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(provider))
+	// An API-key provider key is "openai-compatible-<name>". It contains the
+	// substring "openai", so the vendor aliasing below would fold it into "codex".
+	// Keep it as-is: bindings match on exactly this string.
+	// ponytail: fixed here rather than in quotaProvider, which also buckets quota
+	// snapshots and would migrate existing compat snapshots between buckets.
+	if strings.HasPrefix(trimmed, "openai-compatible") {
+		return trimmed
+	}
 	if normalized := quotaProvider(provider); normalized != "" {
 		return normalized
 	}
-	return strings.ToLower(strings.TrimSpace(provider))
+	return trimmed
 }

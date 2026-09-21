@@ -41,6 +41,12 @@ func normalizeKeyAuthBindings(keyID string, bindings []KeyAuthBinding) ([]KeyAut
 
 func normalizeBindingProvider(provider string) string {
 	provider = strings.ToLower(strings.TrimSpace(provider))
+	// Vendor aliasing applies to OAuth providers only. An API-key provider key is
+	// "openai-compatible-<name>" and merely contains the substring "openai";
+	// collapsing it into "codex" would file an API provider under an OAuth provider.
+	if strings.HasPrefix(provider, "openai-compatible") {
+		return provider
+	}
 	switch {
 	case strings.Contains(provider, "codex") || strings.Contains(provider, "openai") || provider == "chatgpt":
 		return "codex"
