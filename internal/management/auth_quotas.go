@@ -113,6 +113,17 @@ func updateAuthWarmupSettings(ctx context.Context, svc *service.Service, body []
 	return jsonOKNoStore(updated), nil
 }
 
+// getAuthAccounts lists every credential the host holds, OAuth or API-key backed,
+// for the key binding picker. Unlike auth-quotas it is not limited to accounts
+// that expose an upstream quota API.
+func getAuthAccounts(ctx context.Context, svc *service.Service) (pluginapi.ManagementResponse, error) {
+	accounts, err := svc.AuthAccounts(ctx)
+	if err != nil {
+		return jsonErrNoStore(http.StatusServiceUnavailable, "auth accounts unavailable"), nil
+	}
+	return jsonOKNoStore(map[string]any{"items": accounts}), nil
+}
+
 // sessionAffinitySettingsView is the JSON shape the console renders. TTL is a
 // friendly string ("1h") rather than a nanosecond count.
 type sessionAffinitySettingsView struct {

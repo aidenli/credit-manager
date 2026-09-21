@@ -2970,14 +2970,33 @@
     return Array.from($('keyModalModels').selectedOptions).map(option => option.value);
   }
 
-  // OAuth account bindings. Accounts are listed from the paginated auth-quotas
-  // overview; when that list is unavailable the modal must not touch bindings.
+  // Account bindings. The list comes from the host's full credential set, so an
+  // API-key provider can be bound exactly like an OAuth account. auth-quotas
+  // cannot be used here: it deliberately omits credentials with no upstream quota
+  // API, which is every API-key provider.
   function bindingKey(provider, authID) {
     return String(provider || '').trim().toLowerCase() + '\u0000' + String(authID || '').trim();
   }
 
+  function bindingTypeMark(account) {
+    return account && account.oauth ? 'oauth' : 'api';
+  }
+
   function bindingLabel(account) {
-    return account.provider + ' · ' + (account.label || account.auth_id);
+    const name = account.label || account.auth_id;
+    return '[' + bindingTypeMark(account) + '] ' + account.provider + ' · ' + name;
+  }
+
+  async function loadKeyAuthAccounts() {
+    const payload = await api('GET', 'credit-manager/auth-accounts');
+    return (payload.items || [])
+      .filter(account => account.id)
+      .map(account => ({
+        provider: account.provider,
+        auth_id: account.id,
+        label: account.display_name,
+        oauth: account.oauth === true,
+      }));
   }
 
   function selectedKeyAuthBindings() {
@@ -3018,7 +3037,9 @@
     });
     const visible = accounts.filter(account => {
       if (!query || selectedKeys.has(bindingKey(account.provider, account.auth_id))) return true;
-      return [account.auth_id, account.label, account.provider].some(value => String(value || '').toLowerCase().includes(query));
+      // Include the type mark so "oauth" / "api" work as search terms.
+      return [account.auth_id, account.label, account.provider, bindingTypeMark(account)]
+        .some(value => String(value || '').toLowerCase().includes(query));
     }).sort((a, b) => bindingLabel(a).localeCompare(bindingLabel(b)));
     const picker = $('keyModalAuthBindings');
     picker.innerHTML = visible.map(account => {
@@ -3043,18 +3064,15 @@
       return;
     }
     try {
-      // Host candidates fall back to auth_index when an account has no auth id.
-      state.keyAuthAccounts = (await loadAuthWarmupAuths())
-        .filter(account => account.auth_id || account.auth_index)
-        .map(account => ({ provider: account.provider, auth_id: account.auth_id || account.auth_index, label: account.label }));
+      state.keyAuthAccounts = await loadKeyAuthAccounts();
       state.keyAuthAccountsLoaded = true;
     } catch (e) {
       $('keyModalAuthBindingsHint').textContent = '账户列表加载失败：' + e.message + '。保存时不会修改现有绑定。';
       return;
     }
     $('keyModalAuthBindingsHint').textContent = selected.length
-      ? '仅允许使用所选账户；若全部不可用，请求将失败，不会使用其他账户。'
-      : '未选择表示不限制；选择后若全部不可用，请求将失败，不会使用其他账户。';
+      ? '仅允许使用所选账户（oauth = OAuth 账号，api = API 提供商）；若全部不可用，请求将失败，不会使用其他账户。'
+      : '未选择表示不限制；选择后若全部不可用，请求将失败，不会使用其他账户。oauth = OAuth 账号，api = API 提供商。';
     renderKeyAuthBindings(selected);
   }
 

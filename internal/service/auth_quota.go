@@ -37,6 +37,27 @@ type AuthQuotaFile struct {
 	Path      string    `json:"path"`
 	ModTime   time.Time `json:"mod_time"`
 }
+
+// AuthAccount is one credential the host holds, OAuth or API-key backed. Unlike
+// AuthQuotaFile it is not limited to accounts that expose an upstream quota API,
+// so a key can be bound to an API provider too.
+type AuthAccount struct {
+	// ID is the host's credential identifier, the same value the scheduler reports
+	// as a candidate ID and the ledger stores as auth_id.
+	ID        string `json:"id"`
+	AuthIndex string `json:"auth_index"`
+	Provider  string `json:"provider"`
+	// Type is the host credential type (for example "codex" or
+	// "openai-compatibility"), used only for display.
+	Type string `json:"type"`
+	// DisplayName is a human label: label, then email, account, name, finally id.
+	DisplayName string `json:"display_name"`
+	// OAuth reports whether the credential carries an OAuth access token. False
+	// means an API-key backed provider.
+	OAuth    bool `json:"oauth"`
+	Disabled bool `json:"disabled"`
+}
+
 type AuthQuotaHTTPRequest struct {
 	Method string      `json:"method"`
 	URL    string      `json:"url"`
@@ -139,6 +160,47 @@ func (s *Service) authQuotaSourceValue() AuthQuotaSource {
 	s.authQuotaMu.RLock()
 	defer s.authQuotaMu.RUnlock()
 	return s.authQuotaSource
+}
+
+// AuthAccounts lists every credential the host holds, with the OAuth/API-key
+// distinction, so a key can be bound to an API provider as well as an OAuth
+// account. Reading each auth file is what decides the type, because the host's
+// quota list deliberately omits credentials without an upstream quota API.
+func (s *Service) AuthAccounts(ctx context.Context) ([]AuthAccount, error) {
+	source, files, err := s.authQuotaFiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AuthAccount, 0, len(files))
+	for _, file := range files {
+		id := first(file.ID, file.Name, file.AuthIndex)
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		account := AuthAccount{
+			ID:        id,
+			AuthIndex: file.AuthIndex,
+			// authLimitProvider keeps an API-key provider key verbatim, which is
+			// what both the binding and the scheduler candidate use. quotaProvider
+			// would fold "openai-compatible-x" into "codex".
+			Provider:    authLimitProvider(first(file.Provider, file.Type)),
+			Type:        file.Type,
+			DisplayName: first(file.Label, file.Email, file.Account, file.Name, id),
+			Disabled:    file.Disabled,
+		}
+		if account.Provider == "" {
+			account.Provider = strings.ToLower(strings.TrimSpace(first(file.Provider, file.Type)))
+		}
+		// A credential without an access token is API-key backed. Unreadable files
+		// stay non-OAuth rather than failing the whole list.
+		if raw, readErr := source.GetAuthQuotaJSON(ctx, file.AuthIndex); readErr == nil {
+			if _, oauth, credErr := readCredentials(raw); credErr == nil {
+				account.OAuth = oauth
+			}
+		}
+		out = append(out, account)
+	}
+	return out, nil
 }
 
 func (s *Service) AuthQuotaOverview(ctx context.Context, callback string, filter AuthQuotaFilter) (AuthQuotaOverview, error) {

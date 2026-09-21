@@ -195,3 +195,27 @@ func TestConsoleKeyAuthBindingControls(t *testing.T) {
 		t.Fatal("auth binding payload does not stay inert when accounts failed to load")
 	}
 }
+
+// A key may be bound to an API-key provider, not only an OAuth account, and the
+// picker must say which is which. The list therefore comes from the host's full
+// credential set (auth-accounts), not from auth-quotas, which omits API providers.
+func TestConsoleBindingPickerOffersBothAccountKinds(t *testing.T) {
+	page := strings.ReplaceAll(string(consolePage().Body), "\r\n", "\n")
+	for _, text := range []string{
+		"credit-manager/auth-accounts",
+		"async function loadKeyAuthAccounts",
+		"function bindingTypeMark",
+		"account.oauth === true",
+		// The visible type prefix.
+		"'[' + bindingTypeMark(account) + '] '",
+		"oauth = OAuth 账号，api = API 提供商",
+	} {
+		if !strings.Contains(page, text) {
+			t.Fatalf("binding picker is missing account-type support: %q", text)
+		}
+	}
+	// It must no longer source the key modal from the quota-derived list.
+	if strings.Contains(page, "state.keyAuthAccounts = (await loadAuthWarmupAuths())") {
+		t.Fatal("binding picker still sources accounts from the auth-quotas list")
+	}
+}

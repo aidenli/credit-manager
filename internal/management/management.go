@@ -45,6 +45,7 @@ func Routes() []pluginapi.ManagementRoute {
 		{http.MethodPost, "credit-manager/auth-quotas/warmup/settings"},
 		{http.MethodGet, "credit-manager/auth-quotas/session-affinity"},
 		{http.MethodPost, "credit-manager/auth-quotas/session-affinity"},
+		{http.MethodGet, "credit-manager/auth-accounts"},
 		{http.MethodPost, "credit-manager/auth-quotas/concurrency"},
 		{http.MethodPost, "credit-manager/auth-quotas/concurrency/batch"},
 	}
@@ -173,6 +174,8 @@ func Handle(ctx context.Context, req pluginapi.ManagementRequest) (pluginapi.Man
 		return getAuthSessionAffinitySettings(ctx, svc)
 	case req.Method == http.MethodPost && path == "credit-manager/auth-quotas/session-affinity":
 		return updateAuthSessionAffinitySettings(ctx, svc, req.Body)
+	case req.Method == http.MethodGet && path == "credit-manager/auth-accounts":
+		return getAuthAccounts(ctx, svc)
 	case req.Method == http.MethodPost && path == "credit-manager/auth-quotas/concurrency/batch":
 		return updateAuthQuotaConcurrencyBatch(ctx, svc, req.Body)
 	case req.Method == http.MethodPost && path == "credit-manager/auth-quotas/concurrency":
