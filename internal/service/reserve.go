@@ -113,7 +113,20 @@ func (s *Service) BuildReservePlan(ctx context.Context, model string, body []byt
 	return plan, nil
 }
 
+// ReserveOptions carries per-request accounting choices that are decided by the
+// scheduler's pick rather than by the key's policy.
+type ReserveOptions struct {
+	// Fallback marks a request an operator-enabled API provider serves instead of
+	// one of the key's own accounts. Such an attempt is exempt from the key's
+	// concurrency limit: the cap protects the accounts, not the shared provider.
+	Fallback bool
+}
+
 func (s *Service) Reserve(ctx context.Context, key store.PluginKey, plan ReservePlan, idempotency string) (store.Reservation, error) {
+	return s.ReserveWithOptions(ctx, key, plan, idempotency, ReserveOptions{})
+}
+
+func (s *Service) ReserveWithOptions(ctx context.Context, key store.PluginKey, plan ReservePlan, idempotency string, opts ReserveOptions) (store.Reservation, error) {
 	if _, err := s.cleanupStaleReservations(ctx, false); err != nil {
 		return store.Reservation{}, fmt.Errorf("release stale reservations: %w", err)
 	}
@@ -128,6 +141,7 @@ func (s *Service) Reserve(ctx context.Context, key store.PluginKey, plan Reserve
 		RequestTokenEstimate: plan.TokenEstimate,
 		AmountMicroUSD:       plan.Amount,
 		RequestSummary:       reserveSummary(plan),
+		Fallback:             opts.Fallback,
 	})
 }
 

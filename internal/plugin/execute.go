@@ -62,16 +62,19 @@ func execute(raw []byte) ([]byte, error) {
 		}
 		return errorEnvelope("reserve_rejected", err.Error()), nil
 	}
-	reservation, err := svc.Reserve(ctx, key, plan, "")
+	auth := executorAuthIdentity(req.ExecutorRequest)
+	reservation, err := svc.ReserveWithOptions(ctx, key, plan, "", service.ReserveOptions{
+		Fallback: service.IsAPIProviderAuth(auth.Provider, auth.AuthID),
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrModelNotAllowed) {
 			return errorEnvelope("model_not_allowed", err.Error()), nil
 		}
 		return errorEnvelope("limit_rejected", err.Error()), nil
 	}
-	svc.TrackAuthCapture(reservation.ID, plan.Model, req.Model)
+	svc.TrackAuthCaptureWithAuth(reservation.ID, auth, plan.Model, req.Model)
 	defer func() { _ = svc.FinishExecution(ctx, reservation.ID) }()
-	if err := admitExecutorAuth(ctx, svc, reservation.ID, req.ExecutorRequest); err != nil {
+	if err := admitExecutorAuth(ctx, svc, reservation.ID, auth); err != nil {
 		_ = svc.Release(ctx, reservation.ID, "auth_concurrency:"+err.Error())
 		return errorEnvelope("limit_rejected", err.Error()), nil
 	}
@@ -152,7 +155,10 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 	if err != nil {
 		return err
 	}
-	reservation, err := svc.Reserve(ctx, key, plan, "")
+	auth := executorAuthIdentity(req.ExecutorRequest)
+	reservation, err := svc.ReserveWithOptions(ctx, key, plan, "", service.ReserveOptions{
+		Fallback: service.IsAPIProviderAuth(auth.Provider, auth.AuthID),
+	})
 	if err != nil {
 		return err
 	}
@@ -165,9 +171,9 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 		}
 		return errClientDisconnectedBeforeUpstream
 	}
-	svc.TrackAuthCapture(reservation.ID, plan.Model, req.Model)
+	svc.TrackAuthCaptureWithAuth(reservation.ID, auth, plan.Model, req.Model)
 	defer func() { _ = svc.FinishExecution(ctx, reservation.ID) }()
-	if err := admitExecutorAuth(ctx, svc, reservation.ID, req.ExecutorRequest); err != nil {
+	if err := admitExecutorAuth(ctx, svc, reservation.ID, auth); err != nil {
 		_ = svc.Release(ctx, reservation.ID, "auth_concurrency:"+err.Error())
 		return err
 	}
@@ -325,12 +331,16 @@ func parseExecutorStreamUsage(buf []byte, req rpcExecutorRequest) usageparse.Res
 	return best
 }
 
-func admitExecutorAuth(ctx context.Context, svc *service.Service, reservationID string, req pluginapi.ExecutorRequest) error {
-	auth := store.AuthIdentity{
+// executorAuthIdentity is the credential the host dispatched this attempt to.
+func executorAuthIdentity(req pluginapi.ExecutorRequest) store.AuthIdentity {
+	return store.AuthIdentity{
 		AuthID:    strings.TrimSpace(req.AuthID),
 		Provider:  strings.TrimSpace(req.AuthProvider),
 		AuthIndex: firstNonEmpty(metadataString(req.Metadata, "selected_auth_index"), metadataString(req.Metadata, "auth_index")),
 	}
+}
+
+func admitExecutorAuth(ctx context.Context, svc *service.Service, reservationID string, auth store.AuthIdentity) error {
 	if auth.Empty() {
 		return nil
 	}
@@ -406,7 +416,7 @@ func hostModelExecute(hostCallbackID string, req pluginapi.ExecutorRequest, body
 // dispatched to an OpenAI-compatible API provider, so the provider answers
 // instead of rejecting the body with a hard error the client sees as a 500.
 func prepareCompatBody(req rpcExecutorRequest, body []byte) []byte {
-	if !servesAPIProvider(executorAuthContext{authID: requestAuthID(req.ExecutorRequest), provider: req.AuthProvider}) {
+	if !dispatcherServedByAPI(req.ExecutorRequest) {
 		return body
 	}
 	rewritten, stripped := sanitizeCompatRequestBody(body)

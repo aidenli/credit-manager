@@ -342,6 +342,50 @@ func TestReserveReleasesConcurrencySlot(t *testing.T) {
 	}
 }
 
+// TestFallbackReservationSkipsKeyConcurrency covers the accounting promise for
+// API-provider fallback attempts: they neither hit the key's concurrency cap nor
+// appear in its active count, because that cap protects the key's own accounts.
+func TestFallbackReservationSkipsKeyConcurrency(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	defer st.Close()
+	key := newTestKey(t, ctx, st, PluginKeySpec{MaxConcurrentRequests: 1})
+
+	if _, err := st.Reserve(ctx, reserveRequest(key, "held", 1)); err != nil {
+		t.Fatalf("first reserve: %v", err)
+	}
+	if _, err := st.Reserve(ctx, reserveRequest(key, "blocked", 1)); !errors.Is(err, ErrConcurrentLimit) {
+		t.Fatalf("capped reserve error = %v, want %v", err, ErrConcurrentLimit)
+	}
+	request := reserveRequest(key, "fallback", 1)
+	request.Fallback = true
+	fallback, err := st.Reserve(ctx, request)
+	if err != nil {
+		t.Fatalf("fallback reserve at the cap: %v", err)
+	}
+	if !fallback.Fallback {
+		t.Fatalf("fallback reservation lost its marker: %#v", fallback)
+	}
+
+	overview, err := st.GetKeyUsageOverview(ctx, key.ID, time.Now())
+	if err != nil {
+		t.Fatalf("key overview: %v", err)
+	}
+	if overview.ActiveReservations != 1 {
+		t.Fatalf("active reservations = %d, want 1 (fallback excluded)", overview.ActiveReservations)
+	}
+	if _, err := st.Release(ctx, fallback.ID, "test"); err != nil {
+		t.Fatalf("release fallback: %v", err)
+	}
+	overview, err = st.GetKeyUsageOverview(ctx, key.ID, time.Now())
+	if err != nil {
+		t.Fatalf("key overview after release: %v", err)
+	}
+	if overview.ActiveReservations != 1 {
+		t.Fatalf("active reservations after release = %d, want 1", overview.ActiveReservations)
+	}
+}
+
 func TestReserveConcurrentRequestsCannotExceedLimit(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)

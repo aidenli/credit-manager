@@ -31,6 +31,21 @@ type pendingAuthCapture struct {
 // TrackAuthCapture registers a reservation that will later receive selected auth identity.
 // Extra model names (aliases / rewritten upstream ids) improve usage correlation.
 func (s *Service) TrackAuthCapture(reservationID string, models ...string) {
+	s.trackAuthCapture(reservationID, store.AuthIdentity{}, models...)
+}
+
+// TrackAuthCaptureWithAuth registers a reservation and attributes it to the
+// credential the host dispatched, in one step.
+//
+// The executor knows that credential before it starts, and the scheduler binds
+// picks to reservations that have no credential yet. Registering without it would
+// leave a window in which a concurrent scheduler pick could attribute another
+// account's request to this reservation and inflate that account's concurrency.
+func (s *Service) TrackAuthCaptureWithAuth(reservationID string, auth store.AuthIdentity, models ...string) {
+	s.trackAuthCapture(reservationID, auth, models...)
+}
+
+func (s *Service) trackAuthCapture(reservationID string, auth store.AuthIdentity, models ...string) {
 	if s == nil {
 		return
 	}
@@ -43,12 +58,17 @@ func (s *Service) TrackAuthCapture(reservationID string, models ...string) {
 	defer s.authMu.Unlock()
 	s.ensureAuthPendingLocked()
 	s.pruneAuthPendingLocked(time.Now())
-	s.authPending[reservationID] = &pendingAuthCapture{
+	pending := &pendingAuthCapture{
 		reservationID: reservationID,
 		models:        cleaned,
 		startedAt:     time.Now(),
 		active:        true,
 	}
+	if !auth.Empty() {
+		pending.auth = auth
+		pending.hasAuth = true
+	}
+	s.authPending[reservationID] = pending
 }
 
 // ObserveHostUsage correlates a host usage record to a pending reservation and

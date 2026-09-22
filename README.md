@@ -145,6 +145,8 @@ curl -sS "http://127.0.0.1:8317/v1/chat/completions" \
 - 补齐思考模式的 `reasoning_content`：DeepSeek 在工具调用后要求每条 assistant 消息都带该字段，跨提供商转译后的历史往往缺失，缺了就补主机同款占位 `[reasoning unavailable]`（只补不删）；
 - 通过主机的 `host.log` 写出「请求失败 + 上游原文」和「字段已改写」，与主机日志共用同一个 request id，因此客户端看到的那句话可以直接在主机日志里查到。
 
+兜底请求的并发记账：key 的 `max_concurrent_requests` 与"当前并发量"**只统计由该 key 自己账号承载的在途请求**，兜底尝试不占用也不计入；认证并发按本次尝试实际派发的凭证计，所以兜底尝试计在 API 提供商上，不会占用绑定 OAuth 账号的并发。
+
 ## 额度与结算
 
 ### Key 消费额度

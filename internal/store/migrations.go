@@ -484,6 +484,17 @@ var migrations = []migration{
 				  AND INSTR(SUBSTR(auth_id, 22), ':') > 1`,
 		},
 	},
+	{
+		version: 31,
+		name:    "fallback reservations are exempt from key concurrency",
+		up: []string{
+			// A request an operator-enabled API provider serves (the fallback)
+			// must not consume the bound key's concurrency budget: that cap exists
+			// to bound parallelism against the key's own accounts, and the
+			// fallback is a separate shared resource.
+			`ALTER TABLE reservations ADD COLUMN fallback INTEGER NOT NULL DEFAULT 0`,
+		},
+	},
 }
 
 // Migrate applies every pending migration transactionally.

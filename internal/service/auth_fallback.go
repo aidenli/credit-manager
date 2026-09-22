@@ -217,6 +217,15 @@ func authProviderIsAPI(provider string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(provider)), "openai-compatible")
 }
 
+// IsAPIProviderAuth reports whether a credential belongs to an
+// OpenAI-compatible API provider, i.e. a bound key's fallback rather than one of
+// its own OAuth accounts. The provider key is checked first because that is what
+// the host reports for a dispatched credential; the auth id is checked as well
+// because usage records name the credential only by id.
+func IsAPIProviderAuth(provider, authID string) bool {
+	return servingInfoOf(provider, authID, "").API
+}
+
 // ServingInfo records which provider actually served one request: an
 // operator-enabled API provider (a bound key's fallback) rather than one of the
 // key's own OAuth accounts.

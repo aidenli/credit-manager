@@ -170,14 +170,16 @@ func scanReservation(row rowScanner) (Reservation, error) {
 	var held int64
 	var settled, settledAt, releasedAt sql.NullInt64
 	var created, updated int64
+	var fallback int64
 	if err := row.Scan(&reservation.ID, &reservation.CallerID, &reservation.PluginKeyID, &reservation.IdempotencyKey,
 		&reservation.Model, &reservation.RequestTokenEstimate, &held, &settled, &reservation.Status,
-		&reservation.RequestSummary, &reservation.SettlementSummary, &created, &updated, &settledAt, &releasedAt); err != nil {
+		&reservation.RequestSummary, &reservation.SettlementSummary, &fallback, &created, &updated, &settledAt, &releasedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Reservation{}, ErrReservationNotFound
 		}
 		return Reservation{}, err
 	}
+	reservation.Fallback = fallback == 1
 	reservation.HeldMicroUSD = money.MicroUSD(held)
 	if settled.Valid {
 		value := money.MicroUSD(settled.Int64)

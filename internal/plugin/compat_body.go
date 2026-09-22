@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+	"github.com/yuluo688/credit-manager/internal/service"
 )
 
 // Structured-output fields an OpenAI-compatible API provider may reject.
@@ -225,16 +228,9 @@ func repairChatReasoning(messages []any) int {
 	return repaired
 }
 
-// servesAPIProvider reports whether the credential the host dispatched this
-// request to belongs to an OpenAI-compatible API provider, i.e. the bound key's
-// fallback rather than one of its own OAuth accounts.
-func servesAPIProvider(req executorAuthContext) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(req.provider)), "openai-compatible")
-}
-
-// executorAuthContext carries what the host told the plugin about the credential
-// it dispatched the request to.
-type executorAuthContext struct {
-	authID   string
-	provider string
+// dispatcherServedByAPI reports whether the host dispatched this attempt to an
+// OpenAI-compatible API provider, i.e. the bound key's fallback rather than one
+// of its own accounts.
+func dispatcherServedByAPI(req pluginapi.ExecutorRequest) bool {
+	return service.IsAPIProviderAuth(strings.TrimSpace(req.AuthProvider), requestAuthID(req))
 }

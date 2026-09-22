@@ -93,15 +93,18 @@ func interceptRequestAfterAuth(raw []byte) ([]byte, error) {
 		}
 		return okEnvelope(quotaRejectResponse(http.StatusPaymentRequired, err.Error()))
 	}
-	reservation, err := svc.Reserve(ctx, key, plan, "")
+	auth := authIdentityFromIntercept(req)
+	reservation, err := svc.ReserveWithOptions(ctx, key, plan, "", service.ReserveOptions{
+		Fallback: service.IsAPIProviderAuth(auth.Provider, auth.AuthID),
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrModelNotAllowed) {
 			return okEnvelope(modelNotAllowedRejectResponse(err.Error()))
 		}
 		return okEnvelope(quotaRejectResponse(http.StatusTooManyRequests, err.Error()))
 	}
-	svc.TrackAuthCapture(reservation.ID, plan.Model, req.Model, req.RequestedModel)
-	if err := svc.AdmitAuth(ctx, reservation.ID, authIdentityFromIntercept(req)); err != nil {
+	svc.TrackAuthCaptureWithAuth(reservation.ID, auth, plan.Model, req.Model, req.RequestedModel)
+	if err := svc.AdmitAuth(ctx, reservation.ID, auth); err != nil {
 		_ = svc.Release(ctx, reservation.ID, "auth_concurrency:"+err.Error())
 		return okEnvelope(quotaRejectResponse(http.StatusTooManyRequests, err.Error()))
 	}

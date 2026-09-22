@@ -128,7 +128,7 @@
                   <input id="keyModalQuotaUSD" type="number" step="0.01" min="0" placeholder="0 或留空 = 不限制"/>
                 </label>
                 <label>最大并发请求数
-                  <input id="keyModalMaxConcurrent" type="number" step="1" min="0" placeholder="0 或留空 = 不限制"/>
+                  <input id="keyModalMaxConcurrent" type="number" step="1" min="0" placeholder="0 或留空 = 不限制" title="并发按在途请求数计；兜底（API 提供商）请求不占用该额度"/>
                 </label>
                 <label id="keyModalTokenLimitsEnabledWrap" class="key-switch-field">模型 Token 限制
                   <span class="key-switch">
@@ -575,7 +575,7 @@
 
   <section id="tab-auth-quotas" class="tabpane hidden">
     <div class="page-intro">
-      <div><h2>认证额度</h2><p>每个认证按模型组显示当前 5 小时和配额窗口，短周期同样显示；可在卡片内切换历史周期，并设置最大并发。</p></div>
+      <div><h2>认证额度</h2><p>每个认证按模型组显示当前 5 小时和配额窗口，短周期同样显示；可在卡片内切换历史周期，并设置最大并发。兜底（API 提供商）请求计入该提供商，不占用绑定账号的并发。</p></div>
       <div class="auth-quota-toolbar">
         <div class="auth-quota-toolbar-filters">
           <label class="auth-quota-filter">

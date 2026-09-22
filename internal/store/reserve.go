@@ -37,6 +37,10 @@ type Reservation struct {
 	UpdatedAt            time.Time
 	SettledAt            *time.Time
 	ReleasedAt           *time.Time
+	// Fallback marks an attempt an operator-enabled API provider serves instead
+	// of one of the key's own accounts. Those attempts are exempt from the key's
+	// concurrency limit and from its active count.
+	Fallback bool
 }
 
 type ReserveRequest struct {
@@ -48,6 +52,10 @@ type ReserveRequest struct {
 	RequestTokenEstimate int64
 	AmountMicroUSD       money.MicroUSD
 	RequestSummary       string
+	// Fallback exempts this reservation from the key's concurrency limit: the
+	// cap bounds parallelism against the key's own accounts, and the fallback is
+	// a separate shared resource.
+	Fallback bool
 }
 
 func (s *Store) Reserve(ctx context.Context, request ReserveRequest) (Reservation, error) {
@@ -127,10 +135,13 @@ func (s *Store) Reserve(ctx context.Context, request ReserveRequest) (Reservatio
 	if err := enforceModelTokenLimits(ctx, tx, request.PluginKeyID, request.Model, request.RequestTokenEstimate, tokenLimits, unmatchedMode, now); err != nil {
 		return Reservation{}, err
 	}
-	if maxConcurrent > 0 {
+	// A fallback attempt is served by a shared API provider rather than by one of
+	// this key's accounts, so it must not consume the key's concurrency budget:
+	// the operator set that cap to protect the accounts.
+	if maxConcurrent > 0 && !request.Fallback {
 		var active int64
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM reservations
-			WHERE plugin_key_id = ? AND status = 'held'
+			WHERE plugin_key_id = ? AND status = 'held' AND fallback = 0
 			AND execution_finished_at_unix_ms IS NULL`, request.PluginKeyID).Scan(&active); err != nil {
 			return Reservation{}, fmt.Errorf("count active reservations: %w", err)
 		}
@@ -178,10 +189,10 @@ func (s *Store) Reserve(ctx context.Context, request ReserveRequest) (Reservatio
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO reservations(
 		id, caller_id, plugin_key_id, idempotency_key, model, request_token_estimate, held_micro_usd, status,
-		request_summary, created_at_unix_ms, updated_at_unix_ms
-	) VALUES (?, ?, ?, ?, ?, ?, ?, 'held', ?, ?, ?)`,
+		request_summary, fallback, created_at_unix_ms, updated_at_unix_ms
+	) VALUES (?, ?, ?, ?, ?, ?, ?, 'held', ?, ?, ?, ?)`,
 		request.ReservationID, request.CallerID, request.PluginKeyID, request.IdempotencyKey,
-		request.Model, request.RequestTokenEstimate, request.AmountMicroUSD, request.RequestSummary, now, now)
+		request.Model, request.RequestTokenEstimate, request.AmountMicroUSD, request.RequestSummary, boolColumn(request.Fallback), now, now)
 	if err != nil {
 		return Reservation{}, fmt.Errorf("create reservation: %w", err)
 	}
@@ -219,8 +230,10 @@ func (s *Store) GetKeyUsageOverview(ctx context.Context, keyID string, now time.
 	); err != nil {
 		return KeyUsageOverview{}, fmt.Errorf("summarize key usage: %w", err)
 	}
+	// Fallback attempts are excluded so the count matches what the key's
+	// concurrency limit actually throttles.
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM reservations
-		WHERE plugin_key_id = ? AND status = 'held'
+		WHERE plugin_key_id = ? AND status = 'held' AND fallback = 0
 		AND execution_finished_at_unix_ms IS NULL`, keyID).Scan(&overview.ActiveReservations); err != nil {
 		return KeyUsageOverview{}, fmt.Errorf("count active key reservations: %w", err)
 	}
@@ -544,7 +557,7 @@ func (s *Store) TouchReservation(ctx context.Context, reservationID string) erro
 
 const reservationSelect = `SELECT id, caller_id, plugin_key_id, idempotency_key, model, request_token_estimate,
 	held_micro_usd, settled_micro_usd, status, request_summary, settlement_summary,
-	created_at_unix_ms, updated_at_unix_ms, settled_at_unix_ms, released_at_unix_ms FROM reservations`
+	fallback, created_at_unix_ms, updated_at_unix_ms, settled_at_unix_ms, released_at_unix_ms FROM reservations`
 
 func getReservation(ctx context.Context, tx *sql.Tx, reservationID string) (Reservation, error) {
 	return scanReservation(tx.QueryRowContext(ctx, reservationSelect+` WHERE id = ?`, reservationID))

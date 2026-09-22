@@ -9,6 +9,30 @@ import (
 	"github.com/yuluo688/credit-manager/internal/store"
 )
 
+// TestTrackAuthCaptureWithAuthBindsImmediately pins the attribution guarantee: a
+// reservation registered with its dispatched credential is never a candidate for
+// the scheduler's "oldest unattributed" binding, so a concurrent pick cannot
+// charge one account's concurrency to another account's request.
+func TestTrackAuthCaptureWithAuthBindsImmediately(t *testing.T) {
+	svc := &Service{authPending: map[string]*pendingAuthCapture{}}
+	svc.TrackAuthCaptureWithAuth("res-bound", store.AuthIdentity{AuthID: "openai-compatibility:deepseek:1a96cef1d695", Provider: "openai-compatible-deepseek"}, "model-a")
+	svc.TrackAuthCapture("res-unattributed", "model-a")
+	svc.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: "codex-a", Provider: "codex"})
+
+	if got := svc.AuthForSettlement("res-bound", "ledger-bound"); got.AuthID != "openai-compatibility:deepseek:1a96cef1d695" {
+		t.Fatalf("bound reservation auth = %#v", got)
+	}
+	if got := svc.AuthForSettlement("res-unattributed", "ledger-unattributed"); got.AuthID != "codex-a" {
+		t.Fatalf("unattributed reservation auth = %#v", got)
+	}
+	if n := svc.activeAuthRequestsLocked("codex", "codex-a", ""); n != 1 {
+		t.Fatalf("codex-a active requests = %d, want 1", n)
+	}
+	if n := svc.activeAuthRequestsLocked("openai-compatible-deepseek", "openai-compatibility:deepseek:1a96cef1d695", ""); n != 1 {
+		t.Fatalf("fallback active requests = %d, want 1", n)
+	}
+}
+
 func TestObserveHostUsageMatchesAliasBeforeSettle(t *testing.T) {
 	svc := &Service{authPending: map[string]*pendingAuthCapture{}}
 	svc.TrackAuthCapture("res-1", "claude-sonnet")
