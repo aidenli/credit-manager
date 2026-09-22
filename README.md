@@ -142,6 +142,7 @@ curl -sS "http://127.0.0.1:8317/v1/chat/completions" \
 
 - 把嵌套执行固定在该提供商上（`forced_provider`），避免主机自己的选择器把请求挪到另一家提供商；
 - 把提供商不支持的 `response_format`/`text.format` 的 `json_schema` 降级为 `json_object`（未知类型则移除），否则客户端会收到硬 500；
+- 补齐思考模式的 `reasoning_content`：DeepSeek 在工具调用后要求每条 assistant 消息都带该字段，跨提供商转译后的历史往往缺失，缺了就补主机同款占位 `[reasoning unavailable]`（只补不删）；
 - 通过主机的 `host.log` 写出「请求失败 + 上游原文」和「字段已改写」，与主机日志共用同一个 request id，因此客户端看到的那句话可以直接在主机日志里查到。
 
 ## 额度与结算

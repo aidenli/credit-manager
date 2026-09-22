@@ -142,6 +142,7 @@ When a bound Key's request lands on an API provider (the fallback), the plugin:
 
 - pins the nested execution to that provider (`forced_provider`) so the host's own selector cannot move the request to another provider;
 - downgrades `json_schema` structured output in `response_format`/`text.format` to `json_object` (and drops unknown types), because the provider's rejection otherwise reached clients as a hard 500;
+- supplies the thinking-mode `reasoning_content` field: DeepSeek requires it on every assistant message once a tool call has happened, and a history translated across providers is missing it, so the plugin adds the host's own `[reasoning unavailable]` placeholder (it never strips an existing value);
 - reports request failures with the upstream text, and any body rewrite, through the host's `host.log`, sharing the request id with the host's own log lines, so the message a client displayed can be traced back to its source.
 
 ## Limits and Settlement

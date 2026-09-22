@@ -67,7 +67,7 @@ func TestFallbackAttemptRewritesBodyAndPinsProvider(t *testing.T) {
 		return encoded, 0, err
 	}
 
-	body := []byte(`{"model":"gpt-5.6-luna","stream":true,"input":"hi","text":{"format":{"type":"json_schema","name":"x","schema":{}}},"max_output_tokens":16}`)
+	body := []byte(`{"model":"gpt-5.6-luna","stream":true,"input":[{"type":"reasoning","id":"r1","summary":[{"type":"summary_text","text":"planned"}]},{"type":"custom_tool_call","call_id":"c1","name":"exec","input":"1"},{"type":"custom_tool_call_output","call_id":"c1","output":"ok"},{"type":"custom_tool_call","call_id":"c2","name":"exec","input":"2"}],"text":{"format":{"type":"json_schema","name":"x","schema":{}}},"max_output_tokens":16}`)
 	err := runStream(ctx, svc, rpcExecutorRequest{ExecutorRequest: pluginapi.ExecutorRequest{
 		Model: "gpt-5.6-luna", SourceFormat: "openai-response", Format: "openai-response", Stream: true,
 		AuthID: "openai-compatibility:deepseek:1a96cef1d695", AuthProvider: "openai-compatible-deepseek",
@@ -89,11 +89,28 @@ func TestFallbackAttemptRewritesBodyAndPinsProvider(t *testing.T) {
 	if format == nil || format["type"] != "json_object" {
 		t.Fatalf("structured output was not downgraded for the API provider: %s", hostExecution.Body)
 	}
+	// The second tool call had no reasoning item of its own, so the provider's
+	// thinking-mode contract needs the field supplied.
+	items, _ := sent["input"].([]any)
+	if len(items) != 4 {
+		t.Fatalf("nested input items = %#v", sent["input"])
+	}
+	first, _ := items[1].(map[string]any)
+	second, _ := items[3].(map[string]any)
+	if reasoning, _ := first["reasoning_content"].(string); reasoning != "" {
+		t.Fatalf("covered tool call gained a placeholder: %#v", first)
+	}
+	if reasoning, _ := second["reasoning_content"].(string); reasoning != compatReasoningPlaceholder {
+		t.Fatalf("uncovered tool call reasoning = %#v", second)
+	}
 	if len(logs) < 2 {
 		t.Fatalf("host log lines = %#v, want a rewrite and a failure line", logs)
 	}
 	if !strings.Contains(strings.Join(logs, "\n"), "text.format:json_schema->json_object") {
 		t.Fatalf("rewrite was not logged: %#v", logs)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "1x reasoning_content:injected") {
+		t.Fatalf("reasoning repair was not logged: %#v", logs)
 	}
 	if !strings.Contains(strings.Join(logs, "\n"), "response_format type is unavailable") {
 		t.Fatalf("failure text was not logged: %#v", logs)
