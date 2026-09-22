@@ -129,10 +129,20 @@ curl -sS "http://127.0.0.1:8317/v1/chat/completions" \
 | 概览 | 按时间、Key、上游账号、模型和来源汇总；“今日”使用浏览器本地日历日 |
 | 密钥管理 | 签发、揭示、轮换、禁用、撤销、删除、重置额度；配置消费额度、并发、模型范围与 Token 上限 |
 | 模型与价格 | 读取当前代理模型，设置 Token 或按张价格，启停模型与价格规则 |
-| 使用统计 | 按 Key、模型和多种条件筛选的汇总及分页明细 |
+| 使用统计 | 按 Key、模型和多种条件筛选的汇总及分页明细；可用「兜底」条件只看由 API 提供商完成的请求 |
 | 认证额度 | OAuth 认证的上游额度窗口、本地使用预测和认证并发上限 |
 
+使用统计页底部还有一张「释放型失败」表：预留后未结算、直接释放的尝试（不进用量账本），带释放原因与上游原文。多数这类尝试已被重试救回，只有最后一次尝试失败时客户端才会看到错误。
+
 自助查询页不会出现在管理侧栏，不需要宿主管理密钥。插件 Key 仅作为当前请求的 `Authorization` 头发送，不写入 URL 或浏览器存储；公开响应不包含 caller ID、认证账号、邮箱或认证文件路径。
+
+### 兜底请求的兼容与可观测性
+
+绑定 Key 落到 API 提供商（兜底）时，插件会：
+
+- 把嵌套执行固定在该提供商上（`forced_provider`），避免主机自己的选择器把请求挪到另一家提供商；
+- 把提供商不支持的 `response_format`/`text.format` 的 `json_schema` 降级为 `json_object`（未知类型则移除），否则客户端会收到硬 500；
+- 通过主机的 `host.log` 写出「请求失败 + 上游原文」和「字段已改写」，与主机日志共用同一个 request id，因此客户端看到的那句话可以直接在主机日志里查到。
 
 ## 额度与结算
 
@@ -229,8 +239,9 @@ http://<CPA_HOST>:8317/v0/management/credit-manager
 | POST | `/pricing/enabled` | 启停价格规则及对应模型 |
 | POST | `/pricing/delete` | 删除价格规则 |
 | GET | `/balance?key_id=` | 查询 Key 余额与限额 |
-| GET | `/usage` | 查询分页用量明细 |
-| GET | `/usage/summary` | 按 Key 与模型汇总用量 |
+| GET | `/usage` | 查询分页用量明细；`served_api=1` 只看兜底请求，`0` 只看绑定账号 |
+| GET | `/usage/summary` | 按 Key 与模型汇总用量，含 `fallback_count` |
+| GET | `/usage/released` | 查询未结算直接释放的尝试及其释放原因 |
 | GET | `/audit` | 查询审计事件 |
 | GET | `/auth-quotas` | 查询 OAuth 认证额度窗口 |
 | POST | `/auth-quotas/refresh` | 刷新认证额度快照 |

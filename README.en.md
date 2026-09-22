@@ -129,10 +129,20 @@ The console accepts and displays USD. Switching to CNY affects display only. Eve
 | Overview | Aggregates and filters by time, Key, upstream account, model, and source. “Today” uses the browser's local calendar day. |
 | Keys | Mint, reveal, rotate, disable, revoke, delete, and reset spend; configure credit limits, concurrency, model access, and Token caps. |
 | Models & pricing | Load current proxy models, set token or per-image prices, and enable or disable models and rules. |
-| Usage | Paginated detail and summaries with Key, model, and range filters. |
+| Usage | Paginated detail and summaries with Key, model, and range filters. The fallback filter isolates requests an API provider served. |
 | Auth quotas | OAuth upstream quota windows, local usage estimates, and auth concurrency caps. |
 
+The usage tab also lists released attempts at the bottom: holds that were released instead of settled, with the release reason and the upstream text. Retries hide most of them from clients; only the last attempt of a failing request reaches one.
+
 The self-service page is not listed in the management sidebar and needs no host management token. The plugin Key is sent only in the current request's `Authorization` header, never in the URL or browser storage. Public responses exclude caller IDs, auth accounts, emails, and auth-file paths.
+
+### Fallback compatibility and observability
+
+When a bound Key's request lands on an API provider (the fallback), the plugin:
+
+- pins the nested execution to that provider (`forced_provider`) so the host's own selector cannot move the request to another provider;
+- downgrades `json_schema` structured output in `response_format`/`text.format` to `json_object` (and drops unknown types), because the provider's rejection otherwise reached clients as a hard 500;
+- reports request failures with the upstream text, and any body rewrite, through the host's `host.log`, sharing the request id with the host's own log lines, so the message a client displayed can be traced back to its source.
 
 ## Limits and Settlement
 
@@ -229,8 +239,9 @@ Endpoints do not use `/keys/{id}` path parameters. Pass management record IDs th
 | POST | `/pricing/enabled` | Enable or disable a price rule and its model |
 | POST | `/pricing/delete` | Delete a pricing rule |
 | GET | `/balance?key_id=` | Get Key balance and limits |
-| GET | `/usage` | Query paginated usage records |
-| GET | `/usage/summary` | Summarize usage by Key and model |
+| GET | `/usage` | Query paginated usage records; `served_api=1` keeps only fallback requests, `0` only bound accounts |
+| GET | `/usage/summary` | Summarize usage by Key and model, including `fallback_count` |
+| GET | `/usage/released` | List attempts released without settling, with their release reason |
 | GET | `/audit` | Query audit events |
 | GET | `/auth-quotas` | Inspect OAuth auth quota windows |
 | POST | `/auth-quotas/refresh` | Refresh auth-quota snapshots |

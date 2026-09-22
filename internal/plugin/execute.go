@@ -33,6 +33,11 @@ var (
 type hostModelExecutionRequest struct {
 	pluginapi.HostModelExecutionRequest
 	HostCallbackID string `json:"host_callback_id,omitempty"`
+	// ForcedProvider restricts the nested execution to one provider. The
+	// v7.2.128 SDK this plugin compiles against does not declare the field yet,
+	// so it is carried here; hosts that know it honour it and older hosts simply
+	// ignore the unknown JSON member.
+	ForcedProvider string `json:"forced_provider,omitempty"`
 }
 
 func execute(raw []byte) ([]byte, error) {
@@ -74,11 +79,13 @@ func execute(raw []byte) ([]byte, error) {
 	defer stopHeartbeat()
 
 	startedAt := time.Now()
+	body = prepareCompatBody(req, body)
 	hostBody, headers, status, errHost := hostModelExecute(req.HostCallbackID, req.ExecutorRequest, body, false)
 	completedAt := time.Now()
 	metrics := usageMetricsFromRequest(body, startedAt, completedAt, resultFromStatus(status))
 	if errHost != nil {
-		_ = svc.Release(ctx, reservation.ID, "upstream_error:"+errHost.Error())
+		hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "host_execute", errHost)
+		_ = svc.Release(ctx, reservation.ID, releaseReason("upstream_error", errHost))
 		if isAuthConcurrencyError(errHost) {
 			return errorEnvelope("limit_rejected", errHost.Error()), nil
 		}
@@ -86,6 +93,8 @@ func execute(raw []byte) ([]byte, error) {
 	}
 	if status >= 400 {
 		// Upstream executed; settle conservatively unless body has usage.
+		hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "upstream_status",
+			fmt.Errorf("upstream status %d: %s", status, truncateText(string(hostBody), 300)))
 		parsed := usageparse.FromResponseBody(hostBody, req.SourceFormat)
 		if settleErr := svc.SettleFromUsage(ctx, reservation, plan, parsed, req.SourceFormat, metrics); settleErr != nil {
 			_ = svc.Release(ctx, reservation.ID, "settle_failed")
@@ -174,6 +183,7 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 
 	startedAt := time.Now()
 	body = requestBodyWithStreamUsage(body, req.SourceFormat, req.Format)
+	body = prepareCompatBody(req, body)
 	raw, err := callHost(pluginabi.MethodHostModelExecuteStream, hostModelExecutionRequest{
 		HostModelExecutionRequest: pluginapi.HostModelExecutionRequest{
 			EntryProtocol: firstNonEmpty(req.SourceFormat, "openai"),
@@ -185,19 +195,24 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 			Query:         req.Query,
 			Alt:           req.Alt,
 		},
+		ForcedProvider: upstreamForcedProvider(req.ExecutorRequest),
 		HostCallbackID: req.HostCallbackID,
 	})
 	if err != nil {
-		_ = svc.Release(ctx, reservation.ID, "upstream_stream_error")
+		hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "host_execute_stream", err)
+		_ = svc.Release(ctx, reservation.ID, releaseReason("upstream_stream_error", err))
 		return err
 	}
 	var stream pluginapi.HostModelStreamResponse
 	if err := json.Unmarshal(raw, &stream); err != nil {
+		hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "host_stream_decode", err)
 		_ = svc.Release(ctx, reservation.ID, "bad_host_stream")
 		return err
 	}
 	initialCompletedAt := time.Now()
 	if stream.StatusCode >= 400 {
+		hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "upstream_stream_status",
+			fmt.Errorf("upstream stream status %d", stream.StatusCode))
 		_ = closeHostModelStream(stream.StreamID)
 		parsed := usageparse.Result{}
 		if settleErr := svc.SettleFromUsage(ctx, reservation, plan, parsed, req.SourceFormat,
@@ -221,6 +236,7 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 		chunkRaw, errRead := callHost(pluginabi.MethodHostModelStreamRead, pluginapi.HostModelStreamReadRequest{StreamID: stream.StreamID})
 		if errRead != nil {
 			completedAt = time.Now()
+			hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "host_stream_read", errRead)
 			parsed := parseExecutorStreamUsage(buffer.Bytes(), req)
 			if settleErr := svc.SettleFromUsage(ctx, reservation, plan, parsed, firstNonEmpty(req.SourceFormat, req.Format),
 				usageMetricsFromStream(body, startedAt, firstChunkAt, completedAt, "failed")); settleErr != nil {
@@ -231,6 +247,7 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 		var chunk pluginapi.HostModelStreamReadResponse
 		if err := json.Unmarshal(chunkRaw, &chunk); err != nil {
 			completedAt = time.Now()
+			hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "host_stream_chunk_decode", err)
 			if settleErr := svc.SettleFromUsage(ctx, reservation, plan, usageparse.Result{}, req.SourceFormat,
 				usageMetricsFromStream(body, startedAt, firstChunkAt, completedAt, "failed")); settleErr != nil {
 				_ = svc.Release(ctx, reservation.ID, "settle_failed")
@@ -239,6 +256,10 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 		}
 		if chunk.Error != "" {
 			completedAt = time.Now()
+			// This text is what the client displays, and the plugin is the only
+			// layer that sees it: the in-stream terminal failure of an attempt the
+			// host already retried. Log it before settling.
+			hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "upstream_stream_terminal", errors.New(chunk.Error))
 			parsed := parseExecutorStreamUsage(buffer.Bytes(), req)
 			if settleErr := svc.SettleFromUsage(ctx, reservation, plan, parsed, firstNonEmpty(req.SourceFormat, req.Format),
 				usageMetricsFromStream(body, startedAt, firstChunkAt, completedAt, "failed")); settleErr != nil {
@@ -368,6 +389,7 @@ func hostModelExecute(hostCallbackID string, req pluginapi.ExecutorRequest, body
 			Query:         req.Query,
 			Alt:           req.Alt,
 		},
+		ForcedProvider: upstreamForcedProvider(req),
 		HostCallbackID: hostCallbackID,
 	})
 	if err != nil {
@@ -379,6 +401,59 @@ func hostModelExecute(hostCallbackID string, req pluginapi.ExecutorRequest, body
 	}
 	return resp.Body, resp.Headers, resp.StatusCode, nil
 }
+
+// prepareCompatBody rewrites the structured-output fields of a request the host
+// dispatched to an OpenAI-compatible API provider, so the provider answers
+// instead of rejecting the body with a hard error the client sees as a 500.
+func prepareCompatBody(req rpcExecutorRequest, body []byte) []byte {
+	if !servesAPIProvider(executorAuthContext{authID: requestAuthID(req.ExecutorRequest), provider: req.AuthProvider}) {
+		return body
+	}
+	rewritten, stripped := sanitizeCompatRequestBody(body)
+	hostLogCompatFallback(req.HostCallbackID, req.Model, req.AuthProvider, stripped)
+	return rewritten
+}
+
+// upstreamForcedProvider pins the inner host execution to the provider of the
+// credential this plugin selected. Without it the host's own selector may move
+// the request to a different provider, which both bypasses the key's binding and
+// hands an API provider a body it cannot accept.
+//
+// It is limited to the codex/API-provider pair this plugin routes between: other
+// providers (Claude, Gemini, Antigravity) have their own routing and are left
+// exactly as they were.
+func upstreamForcedProvider(req pluginapi.ExecutorRequest) string {
+	provider := strings.TrimSpace(req.AuthProvider)
+	lower := strings.ToLower(provider)
+	if lower == "codex" || strings.HasPrefix(lower, "openai-compatible") {
+		return provider
+	}
+	return ""
+}
+
+func requestAuthID(req pluginapi.ExecutorRequest) string {
+	if authID := strings.TrimSpace(req.AuthID); authID != "" {
+		return authID
+	}
+	return metadataString(req.Metadata, "selected_auth_id")
+}
+
+// releaseReason keeps the original release code as a prefix and appends the
+// upstream error, so the console's released-failure list names the actual error
+// instead of a generic bucket.
+func releaseReason(code string, err error) string {
+	code = strings.TrimSpace(code)
+	if err == nil {
+		return code
+	}
+	detail := errorText(err)
+	if detail == "" {
+		return code
+	}
+	return truncateText(code+": "+detail, maxReleaseReasonBytes)
+}
+
+const maxReleaseReasonBytes = 400
 
 func emitPluginStreamChunk(streamID string, payload []byte) error {
 	_, err := callHost(pluginabi.MethodHostStreamEmit, rpcStreamEmitRequest{StreamID: streamID, Payload: payload})
