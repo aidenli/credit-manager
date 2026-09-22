@@ -128,7 +128,7 @@
                   <input id="keyModalQuotaUSD" type="number" step="0.01" min="0" placeholder="0 或留空 = 不限制"/>
                 </label>
                 <label>最大并发请求数
-                  <input id="keyModalMaxConcurrent" type="number" step="1" min="0" placeholder="0 或留空 = 不限制" title="并发按在途请求数计；兜底（API 提供商）请求不占用该额度"/>
+                  <input id="keyModalMaxConcurrent" type="number" step="1" min="0" placeholder="0 或留空 = 不限制" title="并发按在途请求数计：最多 N 个请求由该 Key 自己的账号承载；兜底（API 提供商）请求不占用该额度，打满时自动溢出到兜底（若已启用）"/>
                 </label>
                 <label id="keyModalTokenLimitsEnabledWrap" class="key-switch-field">模型 Token 限制
                   <span class="key-switch">

@@ -52,6 +52,10 @@ const (
 	// authFallbackReasonBusy means the bound accounts were offered but all of them
 	// were at their concurrency cap or warmup-held.
 	authFallbackReasonBusy = "unavailable"
+	// authFallbackReasonKeyBusy means the key's own concurrency limit was already
+	// in flight. The bound attempt would have been rejected before it started, so
+	// the fallback keeps the request served instead of failing it.
+	authFallbackReasonKeyBusy = "key_busy"
 	// authFallbackRecentWindow is the window the console reports separately.
 	authFallbackRecentWindow = 24 * time.Hour
 )

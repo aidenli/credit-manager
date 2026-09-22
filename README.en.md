@@ -145,7 +145,7 @@ When a bound Key's request lands on an API provider (the fallback), the plugin:
 - supplies the thinking-mode `reasoning_content` field: DeepSeek requires it on every assistant message once a tool call has happened, and a history translated across providers is missing it, so the plugin adds the host's own `[reasoning unavailable]` placeholder (it never strips an existing value);
 - reports request failures with the upstream text, and any body rewrite, through the host's `host.log`, sharing the request id with the host's own log lines, so the message a client displayed can be traced back to its source.
 
-Fallback concurrency accounting: a key's `max_concurrent_requests` and its active count cover only in-flight requests served by the key's own accounts; a fallback attempt neither consumes nor appears in them. Auth concurrency is charged to the credential an attempt was dispatched to, so fallback attempts count against the API provider and never against the bound OAuth account.
+Fallback concurrency accounting: a key's `max_concurrent_requests` and its active count cover only in-flight requests served by the key's own accounts. Once the limit is reached the plugin no longer rejects the request: it spills over to the fallback (when that is enabled and an API provider is in the current candidate window), so the limit means "at most N requests carried by the key's own accounts, the rest go to the paid provider". Only when the fallback is unavailable does the original concurrency rejection apply. Auth concurrency is charged to the credential an attempt was dispatched to, so fallback attempts count against the API provider and never against the bound OAuth account.
 
 ## Limits and Settlement
 

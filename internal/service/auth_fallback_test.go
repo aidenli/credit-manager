@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yuluo688/credit-manager/internal/money"
 	"github.com/yuluo688/credit-manager/internal/store"
 )
 
@@ -44,6 +45,116 @@ func apiCandidates() []AuthPickCandidate {
 
 // A bound key whose accounts are not in the candidate window is served by the
 // API provider instead of failing, because the operator opted in.
+// A key whose own concurrency limit is already in flight would have its bound
+// attempt rejected before it started. The fallback serves the request instead, so
+// the limit reads as "at most N requests carried by the key's own accounts".
+func TestPickAuthForKeySpillsToFallbackWhenKeyConcurrencyIsFull(t *testing.T) {
+	s := fallbackService(t, true)
+	ctx := context.Background()
+	if err := s.Store().PutPricingRule(ctx, store.PricingRule{
+		ID: "all", MatchKind: store.MatchGlob, Pattern: "*", Priority: 1, Enabled: true,
+		Price: money.PricePerMTok{Input: 1_000_000, Output: 1_000_000},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	key, headers := boundKey(t, s, "key-busy")
+	bindOneAccount(t, s, key.ID, "account-1")
+	maxConcurrent := int64(1)
+	if _, err := s.Store().UpdatePluginKeyPolicy(ctx, store.PluginKeyPolicyUpdate{ID: key.ID, MaxConcurrentRequests: &maxConcurrent}); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := s.BuildReservePlan(ctx, "gpt-5.6-sol", []byte(`{"model":"gpt-5.6-sol","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Hold the key's only slot the way an in-flight bound request would. The
+	// candidates offer a usable bound account, so only the key's own limit is full.
+	held, err := s.Reserve(ctx, key, plan, "in-flight")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, handled, err := s.PickAuthForKey(ctx, headers, apiCandidates(), "gpt-5.6-sol")
+	if err != nil || !handled || id != apiAccount1 {
+		t.Fatalf("spilled pick = (%q, %t, %v)", id, handled, err)
+	}
+	status, err := s.AuthFallbackStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.LastHit == nil || status.LastHit.Reason != authFallbackReasonKeyBusy {
+		t.Fatalf("fallback reason = %#v, want %q", status.LastHit, authFallbackReasonKeyBusy)
+	}
+
+	// Once the key's slot is free the bound account is chosen again.
+	if err := s.Release(ctx, held.ID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	id, handled, err = s.PickAuthForKey(ctx, headers, apiCandidates(), "gpt-5.6-sol")
+	if err != nil || !handled || id != "account-1" {
+		t.Fatalf("bound pick after release = (%q, %t, %v)", id, handled, err)
+	}
+}
+
+// A fallback attempt does not occupy the key's own concurrency, so a key holding
+// only fallback traffic still has its accounts picked first.
+func TestPickAuthForKeyIgnoresFallbackReservationsForKeyConcurrency(t *testing.T) {
+	s := fallbackService(t, true)
+	ctx := context.Background()
+	if err := s.Store().PutPricingRule(ctx, store.PricingRule{
+		ID: "all", MatchKind: store.MatchGlob, Pattern: "*", Priority: 1, Enabled: true,
+		Price: money.PricePerMTok{Input: 1_000_000, Output: 1_000_000},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	key, headers := boundKey(t, s, "key-fallback-hold")
+	bindOneAccount(t, s, key.ID, "account-1")
+	maxConcurrent := int64(1)
+	if _, err := s.Store().UpdatePluginKeyPolicy(ctx, store.PluginKeyPolicyUpdate{ID: key.ID, MaxConcurrentRequests: &maxConcurrent}); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := s.BuildReservePlan(ctx, "gpt-5.6-sol", []byte(`{"model":"gpt-5.6-sol","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ReserveWithOptions(ctx, key, plan, "fallback-in-flight", ReserveOptions{Fallback: true}); err != nil {
+		t.Fatal(err)
+	}
+	id, handled, err := s.PickAuthForKey(ctx, headers, apiCandidates(), "gpt-5.6-sol")
+	if err != nil || !handled || id != "account-1" {
+		t.Fatalf("bound pick with only a fallback in flight = (%q, %t, %v)", id, handled, err)
+	}
+}
+
+// Without a usable API provider the key's concurrency rejection stands: spilling
+// must not turn a throttle into a routing change.
+func TestPickAuthForKeyKeepsBoundPickWhenFallbackIsUnavailable(t *testing.T) {
+	s := fallbackService(t, true)
+	ctx := context.Background()
+	if err := s.Store().PutPricingRule(ctx, store.PricingRule{
+		ID: "all", MatchKind: store.MatchGlob, Pattern: "*", Priority: 1, Enabled: true,
+		Price: money.PricePerMTok{Input: 1_000_000, Output: 1_000_000},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	key, headers := boundKey(t, s, "key-busy-no-api")
+	bindOneAccount(t, s, key.ID, "account-1")
+	maxConcurrent := int64(1)
+	if _, err := s.Store().UpdatePluginKeyPolicy(ctx, store.PluginKeyPolicyUpdate{ID: key.ID, MaxConcurrentRequests: &maxConcurrent}); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := s.BuildReservePlan(ctx, "gpt-5.6-sol", []byte(`{"model":"gpt-5.6-sol","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Reserve(ctx, key, plan, "in-flight"); err != nil {
+		t.Fatal(err)
+	}
+	id, handled, err := s.PickAuthForKey(ctx, headers, []AuthPickCandidate{{ID: "account-1", Provider: "codex"}}, "gpt-5.6-sol")
+	if err != nil || !handled || id != "account-1" {
+		t.Fatalf("pick without an API provider = (%q, %t, %v)", id, handled, err)
+	}
+}
+
 func TestPickAuthForKeyFallsBackToAPIProvider(t *testing.T) {
 	s := fallbackService(t, true)
 	ctx := context.Background()

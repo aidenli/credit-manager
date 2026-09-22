@@ -218,6 +218,23 @@ type KeyUsageOverview struct {
 	MonthlyMicroUSD    money.MicroUSD
 }
 
+// CountActiveKeyReservations returns how many in-flight requests the key's own
+// accounts are serving. Fallback attempts are excluded, because they are exempt
+// from the key's concurrency limit.
+func (s *Store) CountActiveKeyReservations(ctx context.Context, keyID string) (int64, error) {
+	keyID = strings.TrimSpace(keyID)
+	if keyID == "" {
+		return 0, fmt.Errorf("%w: plugin key id is required", ErrInvalidArgument)
+	}
+	var active int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM reservations
+		WHERE plugin_key_id = ? AND status = 'held' AND fallback = 0
+		AND execution_finished_at_unix_ms IS NULL`, keyID).Scan(&active); err != nil {
+		return 0, fmt.Errorf("count active key reservations: %w", err)
+	}
+	return active, nil
+}
+
 func (s *Store) GetKeyUsageOverview(ctx context.Context, keyID string, now time.Time) (KeyUsageOverview, error) {
 	if strings.TrimSpace(keyID) == "" {
 		return KeyUsageOverview{}, fmt.Errorf("%w: plugin key id is required", ErrInvalidArgument)
@@ -232,11 +249,11 @@ func (s *Store) GetKeyUsageOverview(ctx context.Context, keyID string, now time.
 	}
 	// Fallback attempts are excluded so the count matches what the key's
 	// concurrency limit actually throttles.
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM reservations
-		WHERE plugin_key_id = ? AND status = 'held' AND fallback = 0
-		AND execution_finished_at_unix_ms IS NULL`, keyID).Scan(&overview.ActiveReservations); err != nil {
-		return KeyUsageOverview{}, fmt.Errorf("count active key reservations: %w", err)
+	active, err := s.CountActiveKeyReservations(ctx, keyID)
+	if err != nil {
+		return KeyUsageOverview{}, err
 	}
+	overview.ActiveReservations = active
 	nowMilli := now.UTC().UnixMilli()
 	dayStart, weekStart, monthStart, err := keyPeriodStarts(ctx, s.db, keyID, nowMilli)
 	if err != nil {

@@ -254,6 +254,19 @@ func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candi
 	if err != nil {
 		return "", false, err
 	}
+	// A key that already has its own concurrency limit in flight would have this
+	// attempt rejected when the executor reserves, which is a hard failure for the
+	// client even though the API provider could serve it. Spill to the fallback
+	// instead, so the limit reads as "at most N requests carried by the key's own
+	// accounts".
+	keyBusy := false
+	if key.MaxConcurrentRequests > 0 {
+		active, err := s.store.CountActiveKeyReservations(ctx, key.ID)
+		if err != nil {
+			return "", false, err
+		}
+		keyBusy = active >= key.MaxConcurrentRequests
+	}
 	// The lock is released explicitly rather than deferred: the fallback audit
 	// write is I/O and must not run while holding the lock shared by every pick.
 	s.authMu.Lock()
@@ -277,6 +290,17 @@ func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candi
 		}
 		s.authMu.Unlock()
 		return "", true, s.noBoundAuthError(candidates)
+	}
+	if keyBusy {
+		if fallback, ok := s.pickFallbackAPIAuthLocked(limits, candidates); ok {
+			fallbackID := strings.TrimSpace(fallback.ID)
+			s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: fallbackID, Provider: fallback.Provider})
+			s.authMu.Unlock()
+			s.recordAuthFallbackHit(ctx, key, fallback, model, authFallbackReasonKeyBusy)
+			return fallbackID, true, nil
+		}
+		// Without a usable API provider the ordinary bound pick stands, so the
+		// client gets the key's concurrency rejection rather than a routing error.
 	}
 	// Bound keys keep their own cursor so one key cannot skew another key's rotation.
 	// With session affinity enabled the session, not the key, decides the account.
