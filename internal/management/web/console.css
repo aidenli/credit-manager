@@ -255,6 +255,13 @@ tbody tr:hover td { background:#f7fbf8; }
 .badge.ok { color:#087d5a; background:var(--accent-soft); border-color:#c8eddd; }
 .badge.bad { color:#bd443b; background:#fff6f4; border-color:#f1d3cf; }
 .badge.warn { color:#a66b07; background:#fff8e9; border-color:#f5dfaf; }
+.badge.fallback { color:#5a49d6; background:#f1effe; border-color:#d9d3fb; margin-right:6px; font-weight:650; }
+.usage-key-label .badge.fallback { flex:0 0 auto; }
+.fallback-cell { color:#5a49d6; }
+.released-table { min-width:0; }
+.released-table td.released-reason { max-width:560px; white-space:normal; }
+.released-table td.released-reason .badge { margin-right:6px; }
+.released-table td.released-reason .mono { display:inline; color:var(--muted); font-size:.76rem; word-break:break-word; }
 .muted { color:var(--muted); }
 table .muted { color:var(--table-muted); }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.88rem; font-weight:500; word-break: break-all; color:var(--table-text); }

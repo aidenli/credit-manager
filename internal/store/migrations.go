@@ -459,6 +459,31 @@ var migrations = []migration{
 				ON audit_events(event_type, created_at_unix_ms)`,
 		},
 	},
+	{
+		version: 30,
+		name:    "usage ledger serving provider",
+		up: []string{
+			// A bound key's request can be served by an operator-enabled API
+			// provider (the fallback) instead of its own OAuth accounts. The
+			// ledger previously only implied that through executor_type, while the
+			// auth columns still named the originally selected credential. Record
+			// it explicitly so the console can mark and count fallback traffic.
+			`ALTER TABLE usage_ledger ADD COLUMN served_api INTEGER NOT NULL DEFAULT 0`,
+			`ALTER TABLE usage_ledger ADD COLUMN served_provider TEXT NOT NULL DEFAULT ''`,
+			// Backfill what the row already implies: a compat executor means an API
+			// provider ran the request.
+			`UPDATE usage_ledger SET served_api = 1
+				WHERE LOWER(COALESCE(executor_type, '')) LIKE '%compat%'
+				   OR LOWER(COALESCE(auth_id, '')) LIKE 'openai-compatibility:%'`,
+			// API auth ids are shaped "openai-compatibility:<name>:<hash>"; the
+			// middle segment is the provider name from the host configuration.
+			`UPDATE usage_ledger
+				SET served_provider = LOWER(SUBSTR(auth_id, 22, INSTR(SUBSTR(auth_id, 22), ':') - 1))
+				WHERE served_provider = ''
+				  AND LOWER(auth_id) LIKE 'openai-compatibility:%:%'
+				  AND INSTR(SUBSTR(auth_id, 22), ':') > 1`,
+		},
+	},
 }
 
 // Migrate applies every pending migration transactionally.

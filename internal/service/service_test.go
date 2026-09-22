@@ -207,7 +207,7 @@ func TestSettleFromUsageBackfillsLateHostCallbackWithoutBlocking(t *testing.T) {
 			backfilled <- err
 			return
 		}
-		backfilled <- svc.ApplyHostUsageRecord(context.Background(), ledgerID, usage, "")
+		backfilled <- svc.ApplyHostUsageRecord(context.Background(), ledgerID, usage, "", ServingInfo{})
 	}()
 	started := time.Now()
 	if err := svc.SettleFromUsage(ctx, reservation, plan, usageparse.Result{}, "openai", store.UsageMetrics{}); err != nil {
@@ -714,7 +714,7 @@ func TestApplyHostUsageRecordIgnoresUnconfirmedRequestTier(t *testing.T) {
 		t.Fatalf("list usage: %v %#v", err, entries)
 	}
 	usage := money.TokenUsage{Input: 1_000, Output: 500}
-	if err := svc.ApplyHostUsageRecord(ctx, entries[0].ID, usage, ""); err != nil {
+	if err := svc.ApplyHostUsageRecord(ctx, entries[0].ID, usage, "", ServingInfo{}); err != nil {
 		t.Fatal(err)
 	}
 	updated, err := svc.Store().GetUsage(ctx, entries[0].ID)
@@ -766,6 +766,88 @@ func TestBuildReservePlanDoesNotApplyContextTierToBodyEstimate(t *testing.T) {
 	}
 	if plan.Amount != base {
 		t.Fatalf("reserve amount = %d, want base card %d (not 272k estimate %d)", plan.Amount, base, contextCost)
+	}
+}
+
+// TestSettleMarksAPIProviderFallback covers the three ways a request's serving
+// provider becomes known, and the one case that must stay unmarked: a key's own
+// bound OAuth account.
+func TestSettleMarksAPIProviderFallback(t *testing.T) {
+	ctx := context.Background()
+	svc := openTestService(t)
+	defer svc.Close()
+	if err := svc.Store().PutPricingRule(ctx, lunaPricingRule()); err != nil {
+		t.Fatal(err)
+	}
+	key, _, err := svc.MintKey(ctx, BootstrapCallerID, "fallback-marker", 10_000_000_000, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.BuildReservePlan(ctx, "gpt-5.6-luna", []byte(`{"model":"gpt-5.6-luna","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	settle := func(name string, admit store.AuthIdentity, executorType string) store.UsageEntry {
+		t.Helper()
+		reservation, err := svc.Reserve(ctx, key, plan, name)
+		if err != nil {
+			t.Fatalf("%s: reserve: %v", name, err)
+		}
+		svc.TrackAuthCapture(reservation.ID, plan.Model)
+		if !admit.Empty() {
+			if err := svc.AdmitAuth(ctx, reservation.ID, admit); err != nil {
+				t.Fatalf("%s: admit auth: %v", name, err)
+			}
+		}
+		if executorType != "" {
+			if _, ok := svc.ObserveHostUsageWithExecutor(time.Now(), store.AuthIdentity{}, money.TokenUsage{Input: 1}, executorType, plan.Model); !ok {
+				t.Fatalf("%s: host usage did not match the pending reservation", name)
+			}
+		}
+		if err := svc.SettleFromUsage(ctx, reservation, plan, usageparse.Result{}, "openai", store.UsageMetrics{}); err != nil {
+			t.Fatalf("%s: settle: %v", name, err)
+		}
+		entries, err := svc.Store().ListUsage(ctx, store.UsageFilter{PluginKeyID: key.ID, Limit: 1})
+		if err != nil || len(entries) != 1 {
+			t.Fatalf("%s: list usage = %#v, err = %v", name, entries, err)
+		}
+		return entries[0]
+	}
+
+	// The plugin's scheduler returned the fallback candidate: the admitted auth
+	// already names the API provider.
+	picked := settle("picked-fallback", store.AuthIdentity{
+		AuthID:   "openai-compatibility:deepseek:1a96cef1d695",
+		Provider: "openai-compatible-deepseek",
+	}, "")
+	if !picked.ServedAPI || picked.ServedProvider != "deepseek" {
+		t.Fatalf("scheduler fallback marker = %#v", picked)
+	}
+
+	// The plugin pinned a bound account and the host retried on the API provider:
+	// only the executor name proves it.
+	retried := settle("host-retried", store.AuthIdentity{
+		AuthID:   "codex-43b33233-gdgpt3@163.com-prolite.json",
+		Provider: "codex",
+	}, "OpenAICompatExecutor")
+	if !retried.ServedAPI {
+		t.Fatalf("executor-only fallback marker = %#v", retried)
+	}
+
+	// A bound account served the request: nothing to mark.
+	bound := settle("bound-account", store.AuthIdentity{
+		AuthID:   "codex-43b33233-gdgpt3@163.com-prolite.json",
+		Provider: "codex",
+	}, "CodexExecutor")
+	if bound.ServedAPI || bound.ServedProvider != "" {
+		t.Fatalf("bound account marker = %#v", bound)
+	}
+
+	served := true
+	fallbacks, err := svc.Store().ListUsage(ctx, store.UsageFilter{PluginKeyID: key.ID, ServedAPI: &served, Limit: 10})
+	if err != nil || len(fallbacks) != 2 {
+		t.Fatalf("fallback filter = %#v, err = %v", fallbacks, err)
 	}
 }
 

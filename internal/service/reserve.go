@@ -246,6 +246,12 @@ func (s *Service) settleMissingUsage(ctx context.Context, reservation store.Rese
 		if pending.hasAuth {
 			settlement.Auth = pending.auth
 		}
+		if serving := servingInfoOf(pending.auth.Provider, pending.auth.AuthID, settlement.ExecutorType); serving.API {
+			settlement.ServedAPI = true
+			if strings.TrimSpace(settlement.ServedProvider) == "" {
+				settlement.ServedProvider = serving.Provider
+			}
+		}
 		previousLedgerID := pending.ledgerID
 		// Keep usage.handle from seeing this ID until the ledger row exists.
 		pending.ledgerID = ledgerID
@@ -269,14 +275,33 @@ func (s *Service) ApplyHostUsage(ctx context.Context, ledgerID string, usage mon
 	return s.applyHostUsage(ctx, ledgerID, usage, "", false)
 }
 
-func (s *Service) ApplyHostUsageRecord(ctx context.Context, ledgerID string, usage money.TokenUsage, hostServiceTier string) error {
+// ApplyHostUsageRecord reprices an already-settled ledger row with the host's
+// final usage and records which provider served it. The serving marker is
+// written even when no tokens are reported, because a fallback request that
+// failed upstream still has to be visible as fallback traffic.
+func (s *Service) ApplyHostUsageRecord(ctx context.Context, ledgerID string, usage money.TokenUsage, hostServiceTier string, serving ServingInfo) error {
 	hostServiceTier = strings.TrimSpace(hostServiceTier)
 	if hostServiceTier != "" {
 		if err := s.store.UpdateUsageTier(ctx, ledgerID, hostServiceTier); err != nil {
 			return err
 		}
 	}
+	if err := s.RecordServing(ctx, ledgerID, serving); err != nil {
+		return err
+	}
 	return s.applyHostUsage(ctx, ledgerID, usage, hostServiceTier, true)
+}
+
+// RecordServing stores the fallback marker on a ledger row. It is best effort at
+// the call sites: a marker write must never fail a settled request.
+func (s *Service) RecordServing(ctx context.Context, ledgerID string, serving ServingInfo) error {
+	if s == nil || s.store == nil {
+		return nil
+	}
+	if !serving.API && strings.TrimSpace(serving.Provider) == "" {
+		return nil
+	}
+	return s.store.UpdateUsageServing(ctx, ledgerID, serving.API, serving.Provider)
 }
 
 func (s *Service) applyHostUsage(ctx context.Context, ledgerID string, usage money.TokenUsage, hostServiceTier string, fromHost bool) error {
@@ -351,7 +376,16 @@ func (s *Service) settleWithAuth(ctx context.Context, settlement store.Settlemen
 	if strings.TrimSpace(settlement.ExecutorType) == "" {
 		settlement.ExecutorType = s.executorForSettlement(settlement.ReservationID)
 	}
+	// Capture the serving provider before AuthForSettlement, which may delete the
+	// pending entry.
+	serving := s.servingForSettlement(settlement.ReservationID)
 	settlement.Auth = s.AuthForSettlement(settlement.ReservationID, settlement.LedgerID)
+	if serving.API {
+		settlement.ServedAPI = true
+	}
+	if strings.TrimSpace(settlement.ServedProvider) == "" {
+		settlement.ServedProvider = serving.Provider
+	}
 	_, err := s.store.Settle(ctx, settlement)
 	return err
 }

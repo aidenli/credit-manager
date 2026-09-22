@@ -158,6 +158,7 @@ func TestAuthQuotaFallbackRoutesAreDeclared(t *testing.T) {
 		"POST credit-manager/auth-quotas/fallback",
 		"GET credit-manager/auth-quotas/session-affinity",
 		"POST credit-manager/auth-quotas/session-affinity",
+		"GET credit-manager/usage/released",
 	} {
 		if !declared[want] {
 			t.Fatalf("management route %q is not declared to the host", want)

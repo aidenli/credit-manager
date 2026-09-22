@@ -51,8 +51,13 @@ func handleUsage(raw []byte) ([]byte, error) {
 		if strings.TrimSpace(record.ExecutorType) != "" {
 			_ = svc.Store().UpdateUsageExecutor(context.Background(), ledgerID, record.ExecutorType)
 		}
+		// Mark API-provider (fallback) traffic before repricing, so a fallback
+		// request that produced no tokens is still visible in the console.
+		serving := service.ServingFromHost(record.Provider, record.ExecutorType)
 		if hostUsageFound(usage) {
-			_ = svc.ApplyHostUsageRecord(context.Background(), ledgerID, usage, hostServiceTier(raw))
+			_ = svc.ApplyHostUsageRecord(context.Background(), ledgerID, usage, hostServiceTier(raw), serving)
+		} else {
+			_ = svc.RecordServing(context.Background(), ledgerID, serving)
 		}
 	}
 	return okEnvelope(map[string]any{})

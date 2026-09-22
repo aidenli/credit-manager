@@ -23,6 +23,12 @@ type Settlement struct {
 	Auth                  AuthIdentity
 	Metrics               UsageMetrics
 	SettlementSummary     string
+	// ServedAPI marks a request that an OpenAI-compatible API provider served
+	// instead of the key's own bound accounts, i.e. the operator-enabled
+	// fallback. ServedProvider is that provider's short name ("deepseek") when it
+	// could be derived from the scheduler candidate or the host usage record.
+	ServedAPI      bool
+	ServedProvider string
 }
 
 // Settle finalizes a held reservation. Cost may exceed held amount; remaining
@@ -87,8 +93,9 @@ func (s *Store) Settle(ctx context.Context, settlement Settlement) (Reservation,
 		id, reservation_id, caller_id, plugin_key_id, executor_type, model, pricing_rule_id, input_tokens, output_tokens,
 		reasoning_tokens, cached_tokens, cache_read_tokens, cache_creation_tokens, total_tokens, cost_micro_usd, estimated_cost_micro_usd, source,
 		tier, result, first_token_latency_ms, generation_duration_ms, tokens_per_second, thinking_intensity,
-		auth_id, auth_index, auth_name, auth_label, auth_provider, auth_type, auth_email, auth_path, created_at_unix_ms
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		auth_id, auth_index, auth_name, auth_label, auth_provider, auth_type, auth_email, auth_path,
+		served_api, served_provider, created_at_unix_ms
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		settlement.LedgerID, settlement.ReservationID, reservation.CallerID, reservation.PluginKeyID, nullableString(settlement.ExecutorType), settlement.Model,
 		settlement.PricingRuleID, settlement.Usage.Input, settlement.Usage.Output,
 		settlement.Usage.Reasoning, settlement.Usage.Cached, settlement.Usage.CacheRead,
@@ -96,7 +103,8 @@ func (s *Store) Settle(ctx context.Context, settlement Settlement) (Reservation,
 		nullableText(settlement.Metrics.Tier), resultLabel, firstTokenLatencyMillis, generationDurationMillis,
 		settlement.Metrics.TokensPerSecond, nullableText(settlement.Metrics.ThinkingIntensity),
 		nullableString(auth.AuthID), nullableString(auth.AuthIndex), nullableString(auth.Name), nullableString(auth.Label),
-		nullableString(auth.Provider), nullableString(auth.Type), nullableString(auth.Email), nullableString(auth.Path), now)
+		nullableString(auth.Provider), nullableString(auth.Type), nullableString(auth.Email), nullableString(auth.Path),
+		boolColumn(settlement.ServedAPI), strings.TrimSpace(settlement.ServedProvider), now)
 	if err != nil {
 		return Reservation{}, fmt.Errorf("write usage ledger: %w", err)
 	}

@@ -623,6 +623,45 @@ func TestConsoleUsageRecentIncludesExecutor(t *testing.T) {
 	}
 }
 
+// TestConsoleMarksFallbackTraffic pins the console surface for the API-provider
+// fallback marker: the filter control, the badge and provider display, and the
+// fallback columns in the rollups.
+// TestConsoleShowsReleasedFailures pins the released-attempt list: attempts that
+// never settled used to be invisible outside the audit tab.
+func TestConsoleShowsReleasedFailures(t *testing.T) {
+	page := string(consolePage().Body)
+	for _, text := range []string{
+		`id="usageReleased"`,
+		`id="usageReleasedCount"`,
+		"function renderReleasedUsage",
+		"credit-manager/usage/released",
+		"释放型失败",
+		"reason_code",
+	} {
+		if !strings.Contains(page, text) {
+			t.Fatalf("console is missing the released-attempt list: %q", text)
+		}
+	}
+}
+
+func TestConsoleMarksFallbackTraffic(t *testing.T) {
+	page := string(consolePage().Body)
+	for _, text := range []string{
+		`id="usageFallbackFilter"`,
+		"<option value=\"1\">仅兜底请求</option>",
+		"served_api: value('usageFallbackFilter')",
+		"function formatFallbackShare",
+		"function fallbackShareCell",
+		"u.served_provider",
+		"badge fallback",
+		"fallback_count",
+	} {
+		if !strings.Contains(page, text) {
+			t.Fatalf("console is missing fallback marking: %q", text)
+		}
+	}
+}
+
 func TestConsoleAuthDisplayShortensCompatibleProviders(t *testing.T) {
 	page := strings.ReplaceAll(string(consolePage().Body), "\r\n", "\n")
 	for _, text := range []string{

@@ -188,6 +188,8 @@ func usageView(entry store.UsageEntry) map[string]any {
 		"auth_email":               entry.Auth.Email,
 		"auth_path":                entry.Auth.Path,
 		"executor_type":            entry.ExecutorType,
+		"served_api":               entry.ServedAPI,
+		"served_provider":          entry.ServedProvider,
 		"model":                    entry.Model,
 		"pricing_rule_id":          entry.PricingRuleID,
 		"input_tokens":             entry.Usage.Input,

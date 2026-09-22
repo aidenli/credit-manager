@@ -27,6 +27,7 @@
     '模型与价格': { 'zh-TW':'模型與價格', en:'Models & pricing', ru:'Модели и цены' }, '文本模型按百万 Token 计价；纯出图模型按张计费，不能套用 Token 价。': { 'zh-TW':'文字模型按百萬 Token 計價；純出圖模型按張計費，不能套用 Token 價。', en:'Text models bill per million tokens; image models bill per image.', ru:'Текстовые модели тарифицируются за миллион токенов, генерация изображений — за картинку.' }, '定价规则': { 'zh-TW':'定價規則', en:'Pricing rules', ru:'Правила цен' }, '当前代理模型': { 'zh-TW':'目前代理模型', en:'Current proxy models', ru:'Текущие модели прокси' }, '加载全部模型': { 'zh-TW':'載入全部模型', en:'Load all models', ru:'Загрузить все модели' }, '加载当前代理公开的模型后，可设置价格，或启用/禁用单个模型。禁用后无法调用，也不会出现在客户端模型列表中。': { 'zh-TW':'載入目前代理公開的模型後，可設定價格，或啟用/停用單一模型。停用後無法呼叫，也不會出現在客戶端模型列表中。', en:'After loading proxy models, set prices or enable/disable a model. Disabled models cannot be called and are omitted from the client model list.', ru:'После загрузки моделей задайте цены или включите/отключите модель. Отключённые модели нельзя вызвать, и они не попадают в клиентский список.' },     '启用': { 'zh-TW':'啟用', en:'Enable', ru:'Включить' }, '禁用': { 'zh-TW':'停用', en:'Disable', ru:'Отключить' }, '状态': { 'zh-TW':'狀態', en:'Status', ru:'Статус' }, '模型已启用': { 'zh-TW':'模型已啟用', en:'Model enabled', ru:'Модель включена' }, '模型已禁用': { 'zh-TW':'模型已停用', en:'Model disabled', ru:'Модель отключена' },
     '计费方式': { 'zh-TW':'計費方式', en:'Billing mode', ru:'Режим тарифа' }, '按 Token（USD / 1M）': { 'zh-TW':'按 Token（USD / 1M）', en:'Per token (USD / 1M)', ru:'За токен (USD / 1M)' }, '按张（出图）': { 'zh-TW':'按張（出圖）', en:'Per image', ru:'За изображение' }, '每张 USD': { 'zh-TW':'每張 USD', en:'USD / image', ru:'USD / изображение' }, '出图': { 'zh-TW':'出圖', en:'Image', ru:'Картинка' },     '按张计费': { 'zh-TW':'按張計費', en:'Billed per image', ru:'За картинку' },
     '从请求、Token 到费用的可筛选账本视图。': { 'zh-TW':'從請求、Token 到費用的可篩選帳本檢視。', en:'A filterable ledger view from requests and tokens to costs.', ru:'Фильтруемый журнал от запросов и токенов до расходов.' }, '实时汇总': { 'zh-TW':'即時彙總', en:'Live summary', ru:'Сводка в реальном времени' }, '统计筛选': { 'zh-TW':'統計篩選', en:'Usage filters', ru:'Фильтры статистики' }, '应用筛选': { 'zh-TW':'套用篩選', en:'Apply filters', ru:'Применить фильтры' }, '清除筛选': { 'zh-TW':'清除篩選', en:'Clear filters', ru:'Очистить фильтры' }, '按密钥汇总': { 'zh-TW':'依密鑰彙總', en:'By key', ru:'По ключам' }, '按模型汇总': { 'zh-TW':'依模型彙總', en:'By model', ru:'По моделям' }, '最近明细': { 'zh-TW':'最近明細', en:'Recent activity', ru:'Последние записи' }, '执行器': { 'zh-TW':'執行器', en:'Executor', ru:'Исполнитель' },
+    '兜底': { 'zh-TW':'兜底', en:'Fallback', ru:'Резерв' }, '兜底请求': { 'zh-TW':'兜底請求', en:'Fallback requests', ru:'Запросы резерва' }, '全部请求': { 'zh-TW':'全部請求', en:'All requests', ru:'Все запросы' }, '仅兜底请求': { 'zh-TW':'僅兜底請求', en:'Fallback only', ru:'Только резерв' }, '仅绑定账号': { 'zh-TW':'僅綁定帳號', en:'Bound accounts only', ru:'Только связанные аккаунты' }, '服务方': { 'zh-TW':'服務方', en:'Served by', ru:'Обслужил' }, '条兜底': { 'zh-TW':'條兜底', en:'fallback', ru:'резерв' }, '释放型失败': { 'zh-TW':'釋放型失敗', en:'Released attempts', ru:'Освобождённые попытки' }, '条记录': { 'zh-TW':'條記錄', en:'records', ru:'записей' },
     '关闭提示': { 'zh-TW':'關閉提示', en:'Close notification', ru:'Закрыть уведомление' }, '取消': { 'zh-TW':'取消', en:'Cancel', ru:'Отмена' }, '保存规则': { 'zh-TW':'儲存規則', en:'Save rule', ru:'Сохранить правило' }, '删除': { 'zh-TW':'刪除', en:'Delete', ru:'Удалить' }, '编辑': { 'zh-TW':'編輯', en:'Edit', ru:'Изменить' }, '复制密钥': { 'zh-TW':'複製密鑰', en:'Copy key', ru:'Копировать ключ' }, '管理密钥': { 'zh-TW':'管理密鑰', en:'Manage key', ru:'Управлять ключом' },
     'CLIProxyAPI 根地址': { 'zh-TW':'CLIProxyAPI 根位址', en:'CLIProxyAPI base URL', ru:'Базовый URL CLIProxyAPI' }, '宿主管理密钥（Bearer）': { 'zh-TW':'宿主管理金鑰（Bearer）', en:'Host management token (Bearer)', ru:'Токен управления хостом (Bearer)' }, '清除本地信息': { 'zh-TW':'清除本機資訊', en:'Clear local data', ru:'Очистить локальные данные' }, '连接并加载': { 'zh-TW':'連線並載入', en:'Connect and load', ru:'Подключиться и загрузить' },
     '创建密钥': { 'zh-TW':'建立密鑰', en:'Create key', ru:'Создать ключ' }, '保存策略': { 'zh-TW':'儲存策略', en:'Save policy', ru:'Сохранить политику' }, '确认轮换': { 'zh-TW':'確認輪換', en:'Confirm rotation', ru:'Подтвердить ротацию' }, '新增价格规则': { 'zh-TW':'新增價格規則', en:'Add pricing rule', ru:'Добавить правило цены' }, '编辑价格规则': { 'zh-TW':'編輯價格規則', en:'Edit pricing rule', ru:'Изменить правило цены' },
@@ -257,6 +258,7 @@
     usagePageSize: 10,
     usageSummary: null,
     usageRecent: null,
+    usageReleased: null,
     deleteKeyID: '',
     resetSpendID: '',
     resetSpendIDs: [],
@@ -1835,7 +1837,7 @@
 
   function renderDisconnectedTabStates() {
     const content = chartEmptyState('', true).replace('chart-empty-state', 'chart-empty-state tab-empty-state');
-    ['keysTable', 'pricingTable', 'usageByKey', 'usageByModel', 'usageRecent', 'authQuotaList'].forEach(id => {
+    ['keysTable', 'pricingTable', 'usageByKey', 'usageByModel', 'usageRecent', 'usageReleased', 'authQuotaList'].forEach(id => {
       const target = $(id);
       if (target) target.innerHTML = content;
     });
@@ -4278,6 +4280,7 @@
     return {
       label: x.Label || x.label || '历史密钥',
       req: x.RequestCount || x.request_count || 0,
+      fb: x.FallbackCount || x.fallback_count || 0,
       cost: x.CostMicroUSD || x.cost_micro_usd || 0,
       inn: x.InputTokens || x.input_tokens || 0,
       out: x.OutputTokens || x.output_tokens || 0,
@@ -4287,10 +4290,29 @@
     return {
       model: x.Model || x.model,
       req: x.RequestCount || x.request_count || 0,
+      fb: x.FallbackCount || x.fallback_count || 0,
       cost: x.CostMicroUSD || x.cost_micro_usd || 0,
       inn: x.InputTokens || x.input_tokens || 0,
       out: x.OutputTokens || x.output_tokens || 0,
     };
+  }
+
+  // formatFallbackShare renders "N（x%）" for a fallback count inside a request
+  // total; the summary card uses it, and the rollup cells keep only the count so
+  // a narrow column never wraps mid-number (the share moves to the tooltip).
+  function formatFallbackShare(count, total) {
+    const n = Number(count || 0);
+    const all = Number(total || 0);
+    if (!all) return String(n);
+    return n + '（' + (n / all * 100).toFixed(1) + '%）';
+  }
+  function fallbackShareCell(count, total) {
+    const n = Number(count || 0);
+    const share = formatFallbackShare(count, total);
+    const title = Number(total || 0) ? n + ' / ' + Number(total) + '（' + share + '）' : share;
+    return n > 0
+      ? '<td class="mono fallback-cell" title="'+esc(title)+'">'+esc(String(n))+'</td>'
+      : '<td class="mono" title="'+esc(title)+'">0</td>';
   }
 
   function renderUsageModelFilter(items) {
@@ -4314,11 +4336,13 @@
     const byModel = (summary.by_model || []).map(normModelSum);
     const items = pageData.items || [];
     const totalRequests = byKey.reduce((sum, item) => sum + Number(item.req || 0), 0);
+    const totalFallback = byKey.reduce((sum, item) => sum + Number(item.fb || 0), 0);
     const totalCost = byKey.reduce((sum, item) => sum + Number(item.cost || 0), 0);
     const totalInput = byKey.reduce((sum, item) => sum + Number(item.inn || 0), 0);
     const totalOutput = byKey.reduce((sum, item) => sum + Number(item.out || 0), 0);
     $('usageStats').innerHTML = [
       ['activity', '筛选请求数', totalRequests],
+      ['plug', t('兜底请求'), formatFallbackShare(totalFallback, totalRequests)],
       ['coin', '筛选费用', formatMoney(totalCost)],
       ['trend', '输入 Token', formatTokens(totalInput)],
       ['layers', '输出 Token', formatTokens(totalOutput)],
@@ -4334,16 +4358,18 @@
     if (filter.auth_id || filter.auth_index) filterLabels.push('账号');
     if (filter.model) filterLabels.push('模型: ' + filter.model);
     if (filter.source) filterLabels.push('来源: ' + filter.source);
+    if (filter.served_api === '1') filterLabels.push(t('仅兜底请求'));
+    if (filter.served_api === '0') filterLabels.push(t('仅绑定账号'));
     if (filter.min_cost_micro_usd || filter.max_cost_micro_usd) filterLabels.push('费用范围');
     if (filter.min_tokens || filter.max_tokens) filterLabels.push('Token 范围');
     $('usageFilterState').textContent = filterLabels.length ? filterLabels.join(' · ') : '未设置筛选';
 
     const emptyState = message => '<div class="empty-state"><span>'+esc(message)+'</span></div>';
-    $('usageByKey').innerHTML = byKey.length ? '<div class="table-scroll"><table><thead><tr><th>密钥</th><th>请求数</th><th>费用 '+esc(currencyCode())+'</th><th>in/out tokens</th></tr></thead><tbody>' +
-      byKey.map(x => '<tr><td><div><strong>'+esc(x.label||'(无标签)')+'</strong></div></td><td>'+esc(x.req)+'</td><td title="'+esc(moneyTitle(x.cost))+'">'+esc(formatMoney(x.cost))+'</td><td title="'+esc(tokenTitle(x.inn)+' / '+tokenTitle(x.out))+'">'+esc(formatTokens(x.inn))+' / '+esc(formatTokens(x.out))+'</td></tr>').join('') +
+    $('usageByKey').innerHTML = byKey.length ? '<div class="table-scroll"><table><thead><tr><th>密钥</th><th>请求数</th><th>'+esc(t('兜底'))+'</th><th>费用 '+esc(currencyCode())+'</th><th>in/out tokens</th></tr></thead><tbody>' +
+      byKey.map(x => '<tr><td><div><strong>'+esc(x.label||'(无标签)')+'</strong></div></td><td>'+esc(x.req)+'</td>'+fallbackShareCell(x.fb, x.req)+'<td title="'+esc(moneyTitle(x.cost))+'">'+esc(formatMoney(x.cost))+'</td><td title="'+esc(tokenTitle(x.inn)+' / '+tokenTitle(x.out))+'">'+esc(formatTokens(x.inn))+' / '+esc(formatTokens(x.out))+'</td></tr>').join('') +
       '</tbody></table></div><p class="table-swipe-hint">左右滑动查看完整汇总</p>' : emptyState('当前筛选条件下暂无按密钥汇总');
-    $('usageByModel').innerHTML = byModel.length ? '<div class="table-scroll"><table><thead><tr><th>模型</th><th>请求数</th><th>费用 '+esc(currencyCode())+'</th><th>in/out tokens</th></tr></thead><tbody>' +
-      byModel.map(x => '<tr><td class="mono">'+esc(x.model)+'</td><td>'+esc(x.req)+'</td><td title="'+esc(moneyTitle(x.cost))+'">'+esc(formatMoney(x.cost))+'</td><td title="'+esc(tokenTitle(x.inn)+' / '+tokenTitle(x.out))+'">'+esc(formatTokens(x.inn))+' / '+esc(formatTokens(x.out))+'</td></tr>').join('') +
+    $('usageByModel').innerHTML = byModel.length ? '<div class="table-scroll"><table><thead><tr><th>模型</th><th>请求数</th><th>'+esc(t('兜底'))+'</th><th>费用 '+esc(currencyCode())+'</th><th>in/out tokens</th></tr></thead><tbody>' +
+      byModel.map(x => '<tr><td class="mono">'+esc(x.model)+'</td><td>'+esc(x.req)+'</td>'+fallbackShareCell(x.fb, x.req)+'<td title="'+esc(moneyTitle(x.cost))+'">'+esc(formatMoney(x.cost))+'</td><td title="'+esc(tokenTitle(x.inn)+' / '+tokenTitle(x.out))+'">'+esc(formatTokens(x.inn))+' / '+esc(formatTokens(x.out))+'</td></tr>').join('') +
       '</tbody></table></div><p class="table-swipe-hint">左右滑动查看完整汇总</p>' : emptyState('当前筛选条件下暂无按模型汇总');
     const formatOptional = (value, formatter) => value == null || value === '' ? '—' : formatter(value);
     const formatMilliseconds = value => formatOptional(value, v => {
@@ -4356,6 +4382,12 @@
     });
     const cacheHit = u => Number(u.cache_read_tokens || 0) > 0 ? '是' : '否';
     const totalUsageTokens = u => usageTokens(u);
+    const servedByAPI = u => u.served_api === true || u.served_api === 1 || u.served_api === '1' || u.served_api === 'true';
+    const fallbackProvider = u => String(u.served_provider || '').trim();
+    // Fallback traffic keeps naming the credential the scheduler picked first,
+    // which is the bound account the request was moved away from. Lead with the
+    // provider that actually answered so the row is not read as bound-account
+    // traffic, and keep the original identity in the tooltip.
     const usageAuthCell = u => {
       const provider = String(u.auth_provider || u.auth_type || '').trim();
       const account = String(u.auth_label || u.auth_email || u.auth_name || u.auth_id || u.auth_index || '').trim();
@@ -4365,7 +4397,13 @@
       const raw = [provider, account].filter(Boolean).join(' · ') || display;
       const secondary = accountDisplay && providerDisplay && !sameAuthText(accountDisplay, providerDisplay) ? providerDisplay : '';
       const primary = accountDisplay || providerDisplay || display;
-      return '<td class="usage-key" title="'+esc(raw)+'"><div class="usage-key-label"><strong>'+esc(primary)+'</strong>'+(secondary ? '<div class="mono">'+esc(secondary)+'</div>' : '')+'</div></td>';
+      if (!servedByAPI(u)) {
+        return '<td class="usage-key" title="'+esc(raw)+'"><div class="usage-key-label"><strong>'+esc(primary)+'</strong>'+(secondary ? '<div class="mono">'+esc(secondary)+'</div>' : '')+'</div></td>';
+      }
+      const served = fallbackProvider(u);
+      const servedText = served ? served : t('兜底');
+      const title = [t('兜底'), served ? t('服务方')+' · '+served : '', raw].filter(Boolean).join(' · ');
+      return '<td class="usage-key" title="'+esc(title)+'"><div class="usage-key-label"><span class="badge fallback">'+esc(t('兜底'))+'</span><strong>'+esc(servedText)+'</strong>'+(served ? '<div class="mono">'+esc(display)+'</div>' : '')+'</div></td>';
     };
 
     $('usageRecent').innerHTML = items.length ? '<div class="table-scroll"><table class="usage-table"><thead><tr><th>时间</th><th>账号</th><th>模型名称</th><th>来源</th><th>执行器</th><th>结果</th><th>首字延迟</th><th>生成时间</th><th>TPS</th><th>思考强度</th><th>输入</th><th>输出</th><th>思考</th><th>缓存读取</th><th>缓存创建</th><th>总 Token 数</th><th>缓存命中</th><th>费用 '+esc(currencyCode())+'</th></tr></thead><tbody>' +
@@ -4377,7 +4415,38 @@
           cell(u.input_tokens || 0)+cell(u.output_tokens || 0)+cell(u.reasoning_tokens || 0)+cell(u.cache_read_tokens || 0)+cell(u.cache_creation_tokens || 0)+cell(totalUsageTokens(u))+
           '<td>'+esc(cacheHit(u))+'</td><td title="'+esc(moneyTitle(settledCost))+'">'+esc(formatMoney(settledCost))+'</td></tr>';
       }).join('') + '</tbody></table></div><p class="table-swipe-hint">左右滑动查看完整明细</p>' : emptyState('当前筛选条件下暂无使用明细');
+    renderReleasedUsage();
     renderUsagePagination(pageData);
+  }
+
+  // renderReleasedUsage lists attempts that were released instead of settled.
+  // Retries hide most of them from the client, and the reason now carries the
+  // upstream text, which is the only record of what the client was told when the
+  // attempt was the last one.
+  function renderReleasedUsage() {
+    const data = state.usageReleased || {};
+    const items = data.items || [];
+    const total = Number(data.total || items.length || 0);
+    $('usageReleasedCount').textContent = total.toLocaleString() + ' ' + t('条记录');
+    if (!items.length) {
+      $('usageReleased').innerHTML = '<div class="empty-state"><span>当前筛选条件下暂无释放型失败</span></div>';
+      return;
+    }
+    $('usageReleased').innerHTML = '<div class="table-scroll"><table class="released-table"><thead><tr><th>时间</th><th>密钥</th><th>模型名称</th><th>原因</th><th>预占 '+esc(currencyCode())+'</th></tr></thead><tbody>' +
+      items.map(item => {
+        const at = item.released_at || item.created_at;
+        const code = String(item.reason_code || '').trim();
+        const reason = String(item.reason || '').trim();
+        const detail = code && reason.startsWith(code) ? reason.slice(code.length).replace(/^:\s*/, '') : '';
+        // The full reason stays in the tooltip; the cell keeps the table near the
+        // card width even when the upstream error carries a JSON body.
+        const shown = detail.length > 140 ? detail.slice(0, 140) + '…' : detail;
+        return '<tr><td class="mono" title="'+esc(at || '')+'">'+esc(formatDateTime(at))+'</td>'+
+          '<td>'+esc(item.key_label || item.plugin_key_id || '—')+'</td>'+
+          '<td class="mono model" title="'+esc(item.model || '')+'">'+esc(item.model || '—')+'</td>'+
+          '<td class="released-reason" title="'+esc(reason)+'">'+(code ? '<span class="badge bad">'+esc(code)+'</span>' : '')+(shown ? '<span class="mono">'+esc(shown)+'</span>' : '')+'</td>'+
+          '<td title="'+esc(moneyTitle(item.held_micro_usd))+'">'+esc(formatMoney(item.held_micro_usd))+'</td></tr>';
+      }).join('') + '</tbody></table></div>' + (total > items.length ? '<p class="table-swipe-hint">仅显示最近 '+items.length+' 条，共 '+total.toLocaleString()+' 条</p>' : '');
   }
 
   function renderUsagePagination(pageData) {
@@ -4438,6 +4507,7 @@
       auth_index: auth.auth_index,
       model: value('usageModelFilter'),
       source: value('usageSourceFilter'),
+      served_api: value('usageFallbackFilter'),
       from: range.from,
       to: range.to,
       min_cost_micro_usd: toMicro('usageMinCost'),
@@ -4466,14 +4536,29 @@
   async function loadUsage(resetPage) {
     if (resetPage) state.usagePage = 1;
     const seq = state.tabLoadSeq;
-    const [summary, recent] = await Promise.all([
+    const [summary, recent, released] = await Promise.all([
       api('GET', 'credit-manager/usage/summary' + usageQuery(false)),
       api('GET', 'credit-manager/usage' + usageQuery(true)),
+      api('GET', 'credit-manager/usage/released' + releasedQuery()),
     ]);
     if (seq !== state.tabLoadSeq) return;
     state.usageSummary = summary;
     state.usageRecent = recent;
+    state.usageReleased = released;
     renderUsage(summary, recent);
+  }
+
+  // releasedQuery reuses the usage filters so the released-attempt list always
+  // describes the same slice of traffic as the ledger tables above it.
+  function releasedQuery() {
+    const params = new URLSearchParams();
+    const filter = getUsageFilterValues();
+    ['plugin_key_id', 'model', 'from', 'to'].forEach(key => {
+      const value = filter[key];
+      if (value) params.set(key, value);
+    });
+    params.set('limit', '20');
+    return '?' + params.toString();
   }
 
   function authQuotaValue(item, key) {
@@ -6419,7 +6504,7 @@
   });
   $('btnClearUsageFilters').addEventListener('click', async () => {
     $('usageRangeFilter').value = 'today';
-    ['usageKeyFilter', 'usageAuthFilter', 'usageModelFilter', 'usageSourceFilter', 'usageFromFilter', 'usageToFilter', 'usageMinCost', 'usageMaxCost', 'usageMinTokens', 'usageMaxTokens'].forEach(id => { $(id).value = ''; });
+    ['usageKeyFilter', 'usageAuthFilter', 'usageModelFilter', 'usageSourceFilter', 'usageFallbackFilter', 'usageFromFilter', 'usageToFilter', 'usageMinCost', 'usageMaxCost', 'usageMinTokens', 'usageMaxTokens'].forEach(id => { $(id).value = ''; });
     closeKeySearch('usage');
     closeAuthSearch('usage');
     refreshCustomControls();

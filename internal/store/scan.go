@@ -210,6 +210,14 @@ func nullableString(value string) any {
 	return value
 }
 
+// boolColumn stores a Go bool in the 0/1 INTEGER columns SQLite uses.
+func boolColumn(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 func nullableDurationMillis(value *time.Duration) any {
 	if value == nil {
 		return nil

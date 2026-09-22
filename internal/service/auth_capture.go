@@ -120,6 +120,28 @@ func (s *Service) executorForSettlement(reservationID string) string {
 	return pending.executorType
 }
 
+// servingForSettlement reports whether an API provider served the reservation's
+// request according to the scheduler candidate and the host executor already
+// captured for it. Call it before AuthForSettlement, which may drop the pending
+// entry once both auth and usage arrived.
+func (s *Service) servingForSettlement(reservationID string) ServingInfo {
+	if s == nil {
+		return ServingInfo{}
+	}
+	reservationID = strings.TrimSpace(reservationID)
+	if reservationID == "" {
+		return ServingInfo{}
+	}
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	s.pruneAuthPendingLocked(time.Now())
+	pending := s.authPending[reservationID]
+	if pending == nil {
+		return ServingInfo{}
+	}
+	return servingInfoOf(pending.auth.Provider, pending.auth.AuthID, pending.executorType)
+}
+
 func (s *Service) pickPendingAuthLocked(requestedAt time.Time, auth store.AuthIdentity, usage money.TokenUsage, modelSet map[string]struct{}, requireModelMatch bool) *pendingAuthCapture {
 	requestedAtKnown := !requestedAt.IsZero()
 	var eligible []*pendingAuthCapture

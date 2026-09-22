@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/yuluo688/credit-manager/internal/money"
@@ -78,6 +79,64 @@ func usageSummary(ctx context.Context, svc *service.Service, query map[string][]
 	}), nil
 }
 
+// listReleasedUsage reports the attempts whose hold was released instead of
+// settled. They never reach the usage ledger, so before this endpoint a failed
+// attempt could only be found as a quota_released audit event, without the model
+// or the upstream error text the reason now carries.
+func listReleasedUsage(ctx context.Context, svc *service.Service, query map[string][]string) (pluginapi.ManagementResponse, error) {
+	limit := queryInt(query, "limit", 20)
+	if limit > 200 {
+		limit = 200
+	}
+	filter := store.ReleasedReservationFilter{
+		CallerID:    firstQuery(query, "caller_id"),
+		PluginKeyID: firstQuery(query, "plugin_key_id"),
+		Model:       firstQuery(query, "model"),
+		Limit:       limit,
+	}
+	var err error
+	if filter.From, err = queryTime(query, "from"); err != nil {
+		return jsonErr(http.StatusBadRequest, err.Error()), nil
+	}
+	if filter.To, err = queryTime(query, "to"); err != nil {
+		return jsonErr(http.StatusBadRequest, err.Error()), nil
+	}
+	items, total, err := svc.Store().ListReleasedReservations(ctx, filter)
+	if err != nil {
+		return jsonErr(http.StatusInternalServerError, err.Error()), nil
+	}
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		view := map[string]any{
+			"id":             item.ID,
+			"plugin_key_id":  item.PluginKeyID,
+			"key_label":      item.KeyLabel,
+			"model":          item.Model,
+			"reason":         item.Reason,
+			"reason_code":    releaseReasonCode(item.Reason),
+			"held_micro_usd": item.HeldMicroUSD,
+			"created_at":     item.CreatedAt,
+			"released_at":    nil,
+		}
+		if item.ReleasedAt != nil {
+			view["released_at"] = *item.ReleasedAt
+		}
+		out = append(out, view)
+	}
+	// no-store: the console renders released attempts straight into a table.
+	return jsonOKNoStore(map[string]any{"items": out, "total": total}), nil
+}
+
+// releaseReasonCode splits the plugin's "<code>: <upstream error>" release reason
+// so the console can show a stable code next to the upstream detail.
+func releaseReasonCode(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if idx := strings.Index(reason, ":"); idx > 0 {
+		return strings.TrimSpace(reason[:idx])
+	}
+	return reason
+}
+
 func usageFilterFromQuery(query map[string][]string, fallbackLimit int) (store.UsageFilter, error) {
 	filter := store.UsageFilter{
 		CallerID:     firstQuery(query, "caller_id"),
@@ -108,6 +167,9 @@ func usageFilterFromQuery(query map[string][]string, fallbackLimit int) (store.U
 	if filter.MaxTokens, err = queryOptionalInt64(query, "max_tokens"); err != nil {
 		return store.UsageFilter{}, err
 	}
+	if filter.ServedAPI, err = queryOptionalBool(query, "served_api"); err != nil {
+		return store.UsageFilter{}, err
+	}
 	if filter.From != nil && filter.To != nil && filter.From.After(*filter.To) {
 		return store.UsageFilter{}, errors.New("from must not be later than to")
 	}
@@ -132,6 +194,7 @@ func usageFilterView(filter store.UsageFilter) map[string]any {
 		"limit":              filter.Limit,
 		"min_tokens":         filter.MinTokens,
 		"max_tokens":         filter.MaxTokens,
+		"served_api":         filter.ServedAPI,
 		"min_cost_micro_usd": filter.MinCostMicroUSD,
 		"max_cost_micro_usd": filter.MaxCostMicroUSD,
 	}
@@ -181,6 +244,25 @@ func queryOptionalInt64(query map[string][]string, key string) (*int64, error) {
 	value, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || value < 0 {
 		return nil, errors.New(key + " must be a non-negative integer")
+	}
+	return &value, nil
+}
+
+func queryOptionalBool(query map[string][]string, key string) (*bool, error) {
+	raw := strings.ToLower(firstQuery(query, key))
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		switch raw {
+		case "0":
+			value = false
+		case "1":
+			value = true
+		default:
+			return nil, errors.New(key + " must be a boolean")
+		}
 	}
 	return &value, nil
 }

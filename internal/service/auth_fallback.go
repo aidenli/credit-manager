@@ -217,6 +217,79 @@ func authProviderIsAPI(provider string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(provider)), "openai-compatible")
 }
 
+// ServingInfo records which provider actually served one request: an
+// operator-enabled API provider (a bound key's fallback) rather than one of the
+// key's own OAuth accounts.
+//
+// The ledger's auth columns keep naming the credential the scheduler selected
+// first, which for a request the host retried onto the API provider is the bound
+// account. This marker is therefore the only per-request record of fallback
+// traffic, and the console shows it next to the account.
+type ServingInfo struct {
+	API      bool
+	Provider string
+}
+
+// ServingFromHost classifies the provider and executor names carried by a host
+// usage record. The host reports the compat executor as "OpenAICompatExecutor"
+// and the concrete provider as "openai-compatible-<name>", so the provider key
+// yields the operator-visible name while the executor name alone still proves an
+// API provider ran the request.
+func ServingFromHost(provider, executorType string) ServingInfo {
+	return ServingInfo{
+		API:      authProviderIsAPI(provider) || authExecutorServesAPI(executorType),
+		Provider: authServingProviderName(provider),
+	}
+}
+
+// servingInfoOf classifies what the plugin already knows before the host usage
+// record arrives: the scheduler candidate it returned (provider plus auth id)
+// and the executor the host later reported.
+func servingInfoOf(provider, authID, executorType string) ServingInfo {
+	info := ServingFromHost(provider, executorType)
+	if !info.API && authProviderIsAPI(authID) {
+		info.API = true
+	}
+	if info.Provider == "" {
+		info.Provider = authServingProviderName(authID)
+	}
+	return info
+}
+
+// authExecutorServesAPI reports whether a host executor name belongs to an
+// OpenAI-compatible API provider.
+func authExecutorServesAPI(executorType string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(executorType)), "compat")
+}
+
+// authServingProviderName extracts the operator-visible provider name from the
+// shapes the host uses: a provider key ("openai-compatible-deepseek") or an API
+// auth id ("openai-compatibility:deepseek:<hash>"). The bare
+// "openai-compatibility" key names no provider, so it yields "".
+func authServingProviderName(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		lower := strings.ToLower(value)
+		switch {
+		case strings.HasPrefix(lower, "openai-compatible-"):
+			if name := strings.TrimSpace(lower[len("openai-compatible-"):]); name != "" {
+				return name
+			}
+		case strings.HasPrefix(lower, "openai-compatibility:"):
+			rest := lower[len("openai-compatibility:"):]
+			if idx := strings.Index(rest, ":"); idx > 0 {
+				if name := strings.TrimSpace(rest[:idx]); name != "" {
+					return name
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // pickFallbackAPIAuthLocked chooses the API provider that should serve a bound
 // key whose own accounts are all unavailable. It returns false when the fallback
 // is disabled, when the request offers no usable API provider, or when every

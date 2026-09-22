@@ -37,6 +37,12 @@ type UsageEntry struct {
 	Auth                  AuthIdentity
 	Metrics               UsageMetrics
 	CreatedAt             time.Time
+	// ServedAPI reports that an operator-enabled OpenAI-compatible API provider
+	// served the request instead of the key's bound account, and ServedProvider
+	// names it when known. Auth keeps naming the credential the scheduler first
+	// selected, so this is the only per-request marker of fallback traffic.
+	ServedAPI      bool
+	ServedProvider string
 }
 
 // UpdateUsageTier records the actual upstream service_tier on a ledger row.
@@ -68,6 +74,33 @@ func (s *Store) UpdateUsageExecutor(ctx context.Context, ledgerID, executorType 
 	}
 	if err := requireOneRow(result, ErrInvalidArgument); err != nil {
 		return err
+	}
+	return nil
+}
+
+// UpdateUsageServing records that an OpenAI-compatible API provider served a
+// ledger row. It only ever turns the marker on and never clears a provider name
+// that was already derived, because a late usage callback must not erase what an
+// earlier one established.
+func (s *Store) UpdateUsageServing(ctx context.Context, ledgerID string, servedAPI bool, servedProvider string) error {
+	ledgerID = strings.TrimSpace(ledgerID)
+	if ledgerID == "" {
+		return fmt.Errorf("%w: ledger id is required", ErrInvalidArgument)
+	}
+	provider := strings.ToLower(strings.TrimSpace(servedProvider))
+	result, err := s.db.ExecContext(ctx, `UPDATE usage_ledger SET
+		served_api = CASE WHEN served_api = 1 THEN 1 ELSE ? END,
+		served_provider = CASE WHEN TRIM(served_provider) <> '' THEN served_provider ELSE ? END
+		WHERE id = ?`, boolColumn(servedAPI), provider, ledgerID)
+	if err != nil {
+		return fmt.Errorf("update usage serving: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("%w: usage ledger not found", ErrInvalidArgument)
 	}
 	return nil
 }
@@ -314,6 +347,7 @@ func (s *Store) ListUsage(ctx context.Context, filter UsageFilter) ([]UsageEntry
 		u.generation_duration_ms, u.tokens_per_second, u.thinking_intensity,
 		COALESCE(u.auth_id, ''), COALESCE(u.auth_index, ''), COALESCE(u.auth_name, ''), COALESCE(u.auth_label, ''),
 		COALESCE(u.auth_provider, ''), COALESCE(u.auth_type, ''), COALESCE(u.auth_email, ''), COALESCE(u.auth_path, ''),
+		u.served_api, COALESCE(u.served_provider, ''),
 		u.created_at_unix_ms
 		FROM usage_ledger u`
 	where, args := usageWhere(filter, "u")
@@ -332,6 +366,7 @@ func (s *Store) ListUsage(ctx context.Context, filter UsageFilter) ([]UsageEntry
 		var entry UsageEntry
 		var pricing sql.NullString
 		var created int64
+		var servedAPI int64
 		var firstTokenLatency, generationDuration sql.NullInt64
 		var tokensPerSecond sql.NullFloat64
 		var tier, resultLabel, thinkingIntensity sql.NullString
@@ -341,9 +376,11 @@ func (s *Store) ListUsage(ctx context.Context, filter UsageFilter) ([]UsageEntry
 			&resultLabel, &firstTokenLatency, &generationDuration, &tokensPerSecond, &thinkingIntensity,
 			&entry.Auth.AuthID, &entry.Auth.AuthIndex, &entry.Auth.Name, &entry.Auth.Label,
 			&entry.Auth.Provider, &entry.Auth.Type, &entry.Auth.Email, &entry.Auth.Path,
+			&servedAPI, &entry.ServedProvider,
 			&created); err != nil {
 			return nil, err
 		}
+		entry.ServedAPI = servedAPI != 0
 		if pricing.Valid {
 			value := pricing.String
 			entry.PricingRuleID = &value
@@ -406,8 +443,11 @@ type UsageFilter struct {
 	MaxCostMicroUSD *money.MicroUSD
 	MinTokens       *int64
 	MaxTokens       *int64
-	Limit           int
-	Offset          int
+	// ServedAPI filters fallback traffic: true keeps only requests an API
+	// provider served, false only the ones a bound account served.
+	ServedAPI *bool
+	Limit     int
+	Offset    int
 }
 
 func usageReportedTotalSQL(prefix string) string {
@@ -492,20 +532,28 @@ func usageWhere(filter UsageFilter, alias string) (string, []any) {
 		conds = append(conds, totalTokens+" <= ?")
 		args = append(args, *filter.MaxTokens)
 	}
+	if filter.ServedAPI != nil {
+		conds = append(conds, prefix+"served_api = ?")
+		args = append(args, boolColumn(*filter.ServedAPI))
+	}
 	return strings.Join(conds, ` AND `), args
 }
 
 type UsageKeySummary struct {
-	Label        string         `json:"label"`
-	RequestCount int64          `json:"request_count"`
-	CostMicroUSD money.MicroUSD `json:"cost_micro_usd"`
-	InputTokens  int64          `json:"input_tokens"`
-	OutputTokens int64          `json:"output_tokens"`
+	Label        string `json:"label"`
+	RequestCount int64  `json:"request_count"`
+	// FallbackCount is how many of RequestCount an API provider served.
+	FallbackCount int64          `json:"fallback_count"`
+	CostMicroUSD  money.MicroUSD `json:"cost_micro_usd"`
+	InputTokens   int64          `json:"input_tokens"`
+	OutputTokens  int64          `json:"output_tokens"`
 }
 
 type UsageModelSummary struct {
-	Model              string         `json:"model"`
-	RequestCount       int64          `json:"request_count"`
+	Model        string `json:"model"`
+	RequestCount int64  `json:"request_count"`
+	// FallbackCount is how many of RequestCount an API provider served.
+	FallbackCount      int64          `json:"fallback_count"`
 	CostMicroUSD       money.MicroUSD `json:"cost_micro_usd"`
 	InputTokens        int64          `json:"input_tokens"`
 	OutputTokens       int64          `json:"output_tokens"`
@@ -534,6 +582,7 @@ type UsageOverviewSummary struct {
 // UsageFilteredSummary is the aggregate for an arbitrary usage filter.
 type UsageFilteredSummary struct {
 	RequestCount        int64          `json:"request_count"`
+	FallbackCount       int64          `json:"fallback_count"`
 	InputTokens         int64          `json:"input_tokens"`
 	OutputTokens        int64          `json:"output_tokens"`
 	ReasoningTokens     int64          `json:"reasoning_tokens"`
@@ -563,7 +612,8 @@ func (s *Store) UsageOverviewSummary(ctx context.Context) (UsageOverviewSummary,
 }
 
 func (s *Store) SummarizeUsageFiltered(ctx context.Context, filter UsageFilter) (UsageFilteredSummary, error) {
-	query := `SELECT COUNT(1), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+	query := `SELECT COUNT(1), COALESCE(SUM(CASE WHEN served_api = 1 THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 		COALESCE(SUM(reasoning_tokens), 0), COALESCE(SUM(cached_tokens), 0),
 		COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_creation_tokens), 0),
 		COALESCE(SUM(` + usageReportedTotalSQL("") + `), 0),
@@ -575,7 +625,7 @@ func (s *Store) SummarizeUsageFiltered(ctx context.Context, filter UsageFilter) 
 	}
 	var summary UsageFilteredSummary
 	if err := s.db.QueryRowContext(ctx, query, args...).Scan(
-		&summary.RequestCount, &summary.InputTokens, &summary.OutputTokens, &summary.ReasoningTokens,
+		&summary.RequestCount, &summary.FallbackCount, &summary.InputTokens, &summary.OutputTokens, &summary.ReasoningTokens,
 		&summary.CachedTokens, &summary.CacheReadTokens, &summary.CacheCreationTokens, &summary.TotalTokens, &summary.CostMicroUSD,
 	); err != nil {
 		return UsageFilteredSummary{}, fmt.Errorf("summarize filtered usage: %w", err)
@@ -618,7 +668,8 @@ func (s *Store) SummarizeUsageByKeyFiltered(ctx context.Context, filter UsageFil
 	query := `
 SELECT COALESCE(k.label, ''),
 	COUNT(1), COALESCE(SUM(u.cost_micro_usd), 0),
-	COALESCE(SUM(u.input_tokens), 0), COALESCE(SUM(u.output_tokens), 0)
+	COALESCE(SUM(u.input_tokens), 0), COALESCE(SUM(u.output_tokens), 0),
+	COALESCE(SUM(CASE WHEN u.served_api = 1 THEN 1 ELSE 0 END), 0)
 FROM usage_ledger u
 LEFT JOIN plugin_keys k ON k.id = u.plugin_key_id`
 	where, args := usageWhere(filter, "u")
@@ -636,7 +687,7 @@ ORDER BY COALESCE(SUM(u.cost_micro_usd), 0) DESC, COUNT(1) DESC`
 	for rows.Next() {
 		var item UsageKeySummary
 		if err := rows.Scan(&item.Label, &item.RequestCount, &item.CostMicroUSD,
-			&item.InputTokens, &item.OutputTokens); err != nil {
+			&item.InputTokens, &item.OutputTokens, &item.FallbackCount); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -654,7 +705,8 @@ func (s *Store) SummarizeUsageByModelFiltered(ctx context.Context, filter UsageF
 	COALESCE(SUM(u.input_tokens), 0), COALESCE(SUM(u.output_tokens), 0),
 	COALESCE(SUM(` + usageReportedTotalSQL("u.") + `), 0),
 	COALESCE(SUM(u.cache_read_tokens), 0),
-	AVG(CASE WHEN u.tokens_per_second IS NOT NULL AND u.tokens_per_second > 0 THEN u.tokens_per_second END)
+	AVG(CASE WHEN u.tokens_per_second IS NOT NULL AND u.tokens_per_second > 0 THEN u.tokens_per_second END),
+	COALESCE(SUM(CASE WHEN u.served_api = 1 THEN 1 ELSE 0 END), 0)
 FROM usage_ledger u`
 	where, args := usageWhere(filter, "u")
 	if where != "" {
@@ -670,7 +722,7 @@ FROM usage_ledger u`
 	for rows.Next() {
 		var item UsageModelSummary
 		var avgTPS sql.NullFloat64
-		if err := rows.Scan(&item.Model, &item.RequestCount, &item.CostMicroUSD, &item.InputTokens, &item.OutputTokens, &item.TotalTokens, &item.CacheReadTokens, &avgTPS); err != nil {
+		if err := rows.Scan(&item.Model, &item.RequestCount, &item.CostMicroUSD, &item.InputTokens, &item.OutputTokens, &item.TotalTokens, &item.CacheReadTokens, &avgTPS, &item.FallbackCount); err != nil {
 			return nil, err
 		}
 		if avgTPS.Valid {

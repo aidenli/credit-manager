@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -679,6 +680,167 @@ func TestUsageExecutorIsPersistedAndBackfilled(t *testing.T) {
 	entry, err := st.GetUsage(ctx, ledgerID)
 	if err != nil || entry.ExecutorType != "OpenAICompatExecutor" {
 		t.Fatalf("backfilled entry = %#v, err = %v", entry, err)
+	}
+}
+
+// TestUsageServingMarkerIsPersistedFilteredAndCounted covers the API-provider
+// fallback marker: written at settlement, upgradeable only towards "served by an
+// API provider", filterable, and counted in the by-key/by-model rollups.
+func TestUsageServingMarkerIsPersistedFilteredAndCounted(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	defer st.Close()
+	key := newTestKey(t, ctx, st, PluginKeySpec{})
+
+	bound, err := st.Reserve(ctx, reserveRequest(key, "serving-bound", 1))
+	if err != nil {
+		t.Fatalf("reserve bound: %v", err)
+	}
+	if _, err := st.Settle(ctx, Settlement{
+		ReservationID: bound.ID,
+		Model:         "test-model",
+		Usage:         money.TokenUsage{Input: 1, Output: 1},
+		CostMicroUSD:  1,
+	}); err != nil {
+		t.Fatalf("settle bound: %v", err)
+	}
+
+	fallback, err := st.Reserve(ctx, reserveRequest(key, "serving-fallback", 1))
+	if err != nil {
+		t.Fatalf("reserve fallback: %v", err)
+	}
+	fallbackLedger := NewID()
+	if _, err := st.Settle(ctx, Settlement{
+		LedgerID:       fallbackLedger,
+		ReservationID:  fallback.ID,
+		Model:          "test-model",
+		Usage:          money.TokenUsage{Input: 2, Output: 2},
+		CostMicroUSD:   2,
+		ServedAPI:      true,
+		ServedProvider: "deepseek",
+	}); err != nil {
+		t.Fatalf("settle fallback: %v", err)
+	}
+
+	entry, err := st.GetUsage(ctx, fallbackLedger)
+	if err != nil {
+		t.Fatalf("get fallback entry: %v", err)
+	}
+	if !entry.ServedAPI || entry.ServedProvider != "deepseek" {
+		t.Fatalf("fallback marker = %#v", entry)
+	}
+
+	// A late host callback may confirm the executor but must never clear the
+	// marker or rename an already derived provider.
+	if err := st.UpdateUsageServing(ctx, fallbackLedger, false, ""); err != nil {
+		t.Fatalf("update serving: %v", err)
+	}
+	entry, err = st.GetUsage(ctx, fallbackLedger)
+	if err != nil {
+		t.Fatalf("get after update: %v", err)
+	}
+	if !entry.ServedAPI || entry.ServedProvider != "deepseek" {
+		t.Fatalf("marker was cleared by a weaker update: %#v", entry)
+	}
+	if err := st.UpdateUsageServing(ctx, fallbackLedger, true, "agnes"); err != nil {
+		t.Fatalf("update serving provider: %v", err)
+	}
+	entry, err = st.GetUsage(ctx, fallbackLedger)
+	if err != nil {
+		t.Fatalf("get after provider update: %v", err)
+	}
+	if entry.ServedProvider != "deepseek" {
+		t.Fatalf("provider overwritten to %q", entry.ServedProvider)
+	}
+
+	served := true
+	servedFallback, err := st.ListUsage(ctx, UsageFilter{PluginKeyID: key.ID, ServedAPI: &served, Limit: 10})
+	if err != nil || len(servedFallback) != 1 || servedFallback[0].ID != fallbackLedger {
+		t.Fatalf("served_api filter = %#v, err = %v", servedFallback, err)
+	}
+	notServed := false
+	boundOnly, err := st.ListUsage(ctx, UsageFilter{PluginKeyID: key.ID, ServedAPI: &notServed, Limit: 10})
+	if err != nil || len(boundOnly) != 1 || boundOnly[0].ID == fallbackLedger {
+		t.Fatalf("non-fallback filter = %#v, err = %v", boundOnly, err)
+	}
+	count, err := st.CountUsage(ctx, UsageFilter{PluginKeyID: key.ID, ServedAPI: &served})
+	if err != nil || count != 1 {
+		t.Fatalf("count fallback = %d, err = %v", count, err)
+	}
+
+	byKey, err := st.SummarizeUsageByKeyFiltered(ctx, UsageFilter{PluginKeyID: key.ID})
+	if err != nil || len(byKey) != 1 || byKey[0].FallbackCount != 1 || byKey[0].RequestCount != 2 {
+		t.Fatalf("by key summary = %#v, err = %v", byKey, err)
+	}
+	byModel, err := st.SummarizeUsageByModelFiltered(ctx, UsageFilter{PluginKeyID: key.ID})
+	if err != nil || len(byModel) != 1 || byModel[0].FallbackCount != 1 {
+		t.Fatalf("by model summary = %#v, err = %v", byModel, err)
+	}
+	filtered, err := st.SummarizeUsageFiltered(ctx, UsageFilter{PluginKeyID: key.ID})
+	if err != nil || filtered.FallbackCount != 1 || filtered.RequestCount != 2 {
+		t.Fatalf("filtered summary = %#v, err = %v", filtered, err)
+	}
+}
+
+// TestUsageServingMarkerMigrationBackfillsLegacyRows pins the migration that
+// teaches pre-existing ledger rows the fallback marker: rows an API provider
+// served must come out marked, and bound-account rows must stay untouched.
+func TestUsageServingMarkerMigrationBackfillsLegacyRows(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "legacy.db"))
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+		version INTEGER PRIMARY KEY,
+		name TEXT NOT NULL,
+		applied_at_unix_ms INTEGER NOT NULL
+	)`); err != nil {
+		t.Fatalf("ensure schema_migrations: %v", err)
+	}
+	for _, m := range migrations {
+		if m.version >= 30 {
+			break
+		}
+		if err := applyMigration(ctx, db, m); err != nil {
+			t.Fatalf("apply legacy migration %d: %v", m.version, err)
+		}
+	}
+	at := time.Now().UnixMilli()
+	insert := `INSERT INTO usage_ledger(id, reservation_id, caller_id, plugin_key_id, model,
+		input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_read_tokens, cache_creation_tokens,
+		cost_micro_usd, source, executor_type, auth_id, created_at_unix_ms)
+		VALUES (?, ?, 'caller', 'key', 'glm-5.3-flash', 1, 1, 0, 0, 0, 0, 1, 'host_usage', ?, ?, ?)`
+	if _, err := db.ExecContext(ctx, insert, "legacy-compat", "r-compat", "OpenAICompatExecutor", "codex-43b33233-gdgpt3@163.com-prolite.json", at); err != nil {
+		t.Fatalf("insert legacy compat row: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, insert, "legacy-api-auth", "r-api", "CodexExecutor", "openai-compatibility:deepseek:1a96cef1d695", at); err != nil {
+		t.Fatalf("insert legacy api auth row: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, insert, "legacy-bound", "r-bound", "CodexExecutor", "codex-ca32f1d1-aidenli1130@163.com-pro.json", at); err != nil {
+		t.Fatalf("insert legacy bound row: %v", err)
+	}
+
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	for id, want := range map[string]struct {
+		served   int
+		provider string
+	}{
+		"legacy-compat":   {1, ""},
+		"legacy-api-auth": {1, "deepseek"},
+		"legacy-bound":    {0, ""},
+	} {
+		var served int
+		var provider string
+		if err := db.QueryRowContext(ctx, `SELECT served_api, served_provider FROM usage_ledger WHERE id = ?`, id).Scan(&served, &provider); err != nil {
+			t.Fatalf("read %s: %v", id, err)
+		}
+		if served != want.served || provider != want.provider {
+			t.Fatalf("%s backfill = (%d, %q), want (%d, %q)", id, served, provider, want.served, want.provider)
+		}
 	}
 }
 
