@@ -43,6 +43,7 @@ type Service struct {
 	warmupCancel       context.CancelFunc
 	warmupSems         map[string]chan struct{}
 	warmupSemLimit     int
+	oauthTest          oauthTestRuntime
 	authPickCursor     map[string]int
 	// sessionAffinity maps a session key to the bound account so a session keeps
 	// hitting the same OAuth account. Guarded by authMu (shared across
@@ -130,6 +131,7 @@ func Open(ctx context.Context, cfg config.Config) (*Service, error) {
 		_ = svc.Close()
 		return nil, fmt.Errorf("release stale reservations: %w", err)
 	}
+	_ = svc.MarkOAuthTestInterrupted(ctx)
 	svc.RefreshModelDirectory(ctx)
 	return svc, nil
 }
@@ -139,6 +141,7 @@ func (s *Service) Close() error {
 		return nil
 	}
 	s.StopAuthWarmup()
+	s.StopOAuthTestScheduler()
 	return s.store.Close()
 }
 
@@ -216,10 +219,14 @@ func Configure(ctx context.Context, rawYAML []byte) error {
 		if _, err := next.cleanupStaleReservations(ctx, true); err != nil {
 			return fmt.Errorf("release stale reservations: %w", err)
 		}
+		_ = next.MarkOAuthTestInterrupted(ctx)
 		if !current.CompareAndSwap(old, next) {
 			return fmt.Errorf("service replaced concurrently during reconfigure")
 		}
 		old.StopAuthWarmup()
+		// The replacement service arms its own probe schedule; leaving the old
+		// ticker armed would run every sweep twice.
+		old.StopOAuthTestScheduler()
 		next.StartAuthWarmup()
 		next.RefreshModelDirectory(ctx)
 		// Leave old.store attached: in-flight callers may still hold *old.

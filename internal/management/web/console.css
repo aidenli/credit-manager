@@ -372,6 +372,31 @@ table .mono.muted { color:var(--table-muted); font-size:.84rem; font-weight:500;
 .chart-empty-state .btn { min-width:108px; }
 .actions { display:flex; gap:7px; flex-wrap:wrap; align-items:center; }
 .tabpane { width:100%; max-width:none; animation: pane-in .18s ease both; }
+.oauth-tests-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.2fr); gap:16px; }
+.oauth-tests-form { margin:14px 0; }
+.oauth-tests-form textarea { min-height:100px; }
+.oauth-tests-results { min-width:0; }
+.oauth-tests-latest { display:grid; gap:14px; }
+.oauth-tests-question { padding:12px; border:1px solid var(--line); border-radius:10px; background:var(--panel-2); }
+.oauth-tests-question h3 { margin:0 0 8px; font-size:.84rem; }
+.oauth-tests-answer { white-space:pre-wrap; word-break:break-word; line-height:1.5; }
+.oauth-tests-preview { width:100%; min-height:180px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+.oauth-test-toggle { display:flex; align-items:center; gap:8px; }
+.oauth-tests-run { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.oauth-tests-run-status { padding:2px 8px; border-radius:999px; border:1px solid var(--line); font-size:.78rem; }
+.oauth-tests-run-status.is-ok { color:#1a7f37; border-color:currentColor; }
+.oauth-tests-run-status.is-failed { color:#c0392b; border-color:currentColor; }
+.oauth-tests-run-status.is-running { color:#1f6feb; border-color:currentColor; }
+.oauth-tests-run-meta { color:var(--muted); font-size:.8rem; }
+.oauth-tests-run-error { color:#c0392b; }
+.oauth-tests-accounts { display:grid; gap:6px; }
+.oauth-tests-account { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 10px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; }
+.oauth-tests-account-name { font-weight:600; word-break:break-word; }
+.oauth-tests-account-status { font-size:.78rem; color:var(--muted); }
+.oauth-tests-account-status.is-ok { color:#1a7f37; }
+.oauth-tests-account-status.is-failed { color:#c0392b; }
+.oauth-tests-account-detail { grid-column:1 / -1; color:var(--muted); font-size:.78rem; word-break:break-word; }
+@media (max-width:760px) { .oauth-tests-grid { grid-template-columns:1fr; } }
 @keyframes pane-in { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
 .hidden { display:none !important; }
 .panel-title { margin:0 0 12px; font-size:1rem; letter-spacing:-.015em; }

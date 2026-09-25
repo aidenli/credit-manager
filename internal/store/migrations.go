@@ -495,6 +495,18 @@ var migrations = []migration{
 			`ALTER TABLE reservations ADD COLUMN fallback INTEGER NOT NULL DEFAULT 0`,
 		},
 	},
+	{
+		version: 32,
+		name:    "oauth intelligence test state",
+		up: []string{
+			`CREATE TABLE IF NOT EXISTS oauth_test_state (
+				id INTEGER PRIMARY KEY CHECK (id = 1),
+				config_json TEXT NOT NULL DEFAULT '{}',
+				latest_json TEXT NOT NULL DEFAULT '{}',
+				updated_at_unix_ms INTEGER NOT NULL
+			)`,
+		},
+	},
 }
 
 // Migrate applies every pending migration transactionally.

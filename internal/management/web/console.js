@@ -1501,6 +1501,120 @@
     return data;
   }
 
+  // OAuth intelligence probe: the run is a sweep over accounts, and each account
+  // carries question1 (text) plus question2_html (previewed in a sandboxed
+  // iframe). The iframe stays script-disabled: the HTML is model output, and the
+  // console is a privileged page.
+  function oauthTestRun() {
+    const run = state.oauthTestsLatest || {};
+    return run && typeof run === 'object' ? run : {};
+  }
+  function oauthTestResults(run) {
+    return Array.isArray(run.results) ? run.results : [];
+  }
+  function oauthTestLatestAnswer(run) {
+    const results = oauthTestResults(run);
+    for (let i = results.length - 1; i >= 0; i -= 1) {
+      const result = results[i] || {};
+      if (result.status === 'succeeded' && (result.question1 || result.question2_html)) return result;
+    }
+    for (let i = results.length - 1; i >= 0; i -= 1) {
+      const result = results[i] || {};
+      if (result.question1 || result.question2_html) return result;
+    }
+    return null;
+  }
+  function renderOAuthTestAccounts(run) {
+    const results = oauthTestResults(run);
+    if (!results.length) return '<div class="hint">本轮还没有账号结果</div>';
+    const rows = results.map((result) => {
+      const name = result.display_name || result.auth_id || '未知账号';
+      const status = result.status || 'unknown';
+      const detail = result.error ? ' · ' + result.error : '';
+      const provider = result.provider ? ' · ' + result.provider : '';
+      return '<div class="oauth-tests-account"><span class="oauth-tests-account-name">' + esc(name) + provider + '</span><span class="oauth-tests-account-status ' + (status === 'failed' ? 'is-failed' : status === 'succeeded' ? 'is-ok' : '') + '">' + esc(status) + '</span><span class="oauth-tests-account-detail">' + esc(detail) + '</span></div>';
+    });
+    return '<div class="oauth-tests-accounts">' + rows.join('') + '</div>';
+  }
+  function renderOAuthTestsLatest(data) {
+    const run = data && typeof data === 'object' ? data : {};
+    state.oauthTestsLatest = run;
+    const root = $('oauthTestsLatest');
+    if (!root) return;
+    if (!run.status) { root.innerHTML = '<div class="empty-state">暂无结果</div>'; return; }
+    const answer = oauthTestLatestAnswer(run) || {};
+    const q1 = answer.question1 || '';
+    const q2 = answer.question2_html || '';
+    const frame = q2
+      ? '<iframe class="oauth-tests-preview" sandbox="" srcdoc="' + String(q2).replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '"></iframe>'
+      : '<div class="hint">暂无题2预览</div>';
+    const started = run.started_at ? new Date(run.started_at).toLocaleString() : '';
+    const headline = '<div class="oauth-tests-run"><span class="oauth-tests-run-status ' + (run.status === 'failed' ? 'is-failed' : run.status === 'running' ? 'is-running' : 'is-ok') + '">' + esc(run.status) + '</span><span class="oauth-tests-run-meta">' + esc(run.model || '') + ' · ' + esc(run.thinking_intensity || '') + ' · ' + esc(started) + '</span></div>'
+      + (run.error ? '<div class="hint oauth-tests-run-error">' + esc(run.error) + '</div>' : '');
+    const owner = answer.display_name ? '<div class="hint">最近一条成功结果来自：' + esc(answer.display_name) + '</div>' : '';
+    root.innerHTML = headline
+      + renderOAuthTestAccounts(run)
+      + owner
+      + '<div class="oauth-tests-question"><h3>题1 · 纯文本</h3><div class="oauth-tests-answer"></div></div>'
+      + '<div class="oauth-tests-question"><h3>题2 · iframe 预览</h3>' + frame + '</div>';
+    root.querySelector('.oauth-tests-answer').textContent = q1 || '暂无内容';
+    if (run.status === 'running') scheduleOAuthTestsRefresh();
+  }
+  function scheduleOAuthTestsRefresh() {
+    if (state.oauthTestsRefreshTimer) return;
+    state.oauthTestsRefreshTimer = window.setTimeout(async () => {
+      state.oauthTestsRefreshTimer = null;
+      if ((state.currentTab || '') !== 'oauth-tests') return;
+      try {
+        await loadOAuthTestsLatest();
+      } catch (err) {
+        // A failed poll must not break the tab; the manual refresh stays.
+      }
+    }, 5000);
+  }
+  function oauthTestsSettingsPayload() {
+    return {
+      enabled: $('oauthTestsEnabled').checked,
+      interval_minutes: Number($('oauthTestsInterval').value) || 60,
+      model: $('oauthTestsModel').value.trim() || 'gpt-6-astra',
+      thinking_intensity: $('oauthTestsReasoning').value,
+      prompt: $('oauthTestsPrompt').value,
+    };
+  }
+  function applyOAuthTestsSettings(settings) {
+    if (!settings) return;
+    const intensity = settings.thinking_intensity || settings.reasoning_effort || settings.reasoning || 'high';
+    $('oauthTestsModel').value = settings.model || 'gpt-6-astra';
+    $('oauthTestsReasoning').value = intensity;
+    $('oauthTestsEnabled').checked = !!settings.enabled;
+    $('oauthTestsInterval').value = settings.interval_minutes || 60;
+    $('oauthTestsPrompt').value = settings.prompt || '';
+    const badge = $('oauthTestsBadge');
+    if (badge) badge.textContent = settings.enabled ? ('定时 ' + (settings.interval_minutes || 60) + ' 分钟') : '定时未启用';
+  }
+  async function loadOAuthTestsSettings() {
+    const data = await api('GET', 'credit-manager/oauth-tests/settings');
+    const settings = data && (data.settings || data);
+    applyOAuthTestsSettings(settings);
+    $('oauthTestsStatus').textContent = '已加载';
+    return data;
+  }
+  async function saveOAuthTestsSettings() {
+    const data = await api('POST', 'credit-manager/oauth-tests/settings', oauthTestsSettingsPayload());
+    applyOAuthTestsSettings(data && (data.settings || data));
+    $('oauthTestsStatus').textContent = '已保存';
+    flash('OAuth 测试设置已保存', true);
+    return data;
+  }
+  async function loadOAuthTestsLatest() { const data = await api('GET', 'credit-manager/oauth-tests/latest'); renderOAuthTestsLatest(data); return data; }
+  async function runOAuthTests() {
+    await saveOAuthTestsSettings();
+    const data = await api('POST', 'credit-manager/oauth-tests/run', {});
+    flash('OAuth 测试已启动', true);
+    renderOAuthTestsLatest(data);
+    scheduleOAuthTestsRefresh();
+  }
+  async function stopOAuthTests() { await api('POST', 'credit-manager/oauth-tests/stop', {}); flash('OAuth 测试已停止', true); await loadOAuthTestsLatest(); }
   // Refresh only the data needed by the visible tab when switching.
   async function refreshActiveTab() {
     const tab = state.currentTab || 'overview';
@@ -1512,6 +1626,7 @@
       if (seq !== state.tabLoadSeq) return;
       return;
     }
+    if (tab === 'oauth-tests') { await loadOAuthTestsSettings(); await loadOAuthTestsLatest(); return; }
     if (tab === 'auth-quotas') {
       loadSessionAffinitySettings().catch(() => {});
       loadAuthFallbackSettings().catch(() => {});
@@ -6122,6 +6237,11 @@
   $('btnRefreshAuthQuotaPage').addEventListener('click', () => {
     refreshVisibleAuthQuotas().catch(e => flash(e.message, false));
   });
+  $('btnOAuthTestsLoad').addEventListener('click', () => loadOAuthTestsSettings().catch(e => flash(e.message, false)));
+  $('btnOAuthTestsSave').addEventListener('click', () => saveOAuthTestsSettings().catch(e => flash(e.message, false)));
+  $('btnOAuthTestsRun').addEventListener('click', () => runOAuthTests().catch(e => flash(e.message, false)));
+  $('btnOAuthTestsStop').addEventListener('click', () => stopOAuthTests().catch(e => flash(e.message, false)));
+  $('btnOAuthTestsRefresh').addEventListener('click', () => loadOAuthTestsLatest().catch(e => flash(e.message, false)));
   $('btnAuthWarmupSettings').addEventListener('click', () => {
     openAuthWarmupSettings().catch(e => flash(e.message, false));
   });

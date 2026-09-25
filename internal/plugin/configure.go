@@ -15,7 +15,9 @@ func configure(req lifecycleRequest) error {
 	service.Current().SetAuthQuotaSource(hostAuthQuotaSource{})
 	service.Current().SetModelDirectorySyncer(hostModelDirectorySyncer{})
 	service.Current().SetAuthWarmupExecutor(hostAuthWarmupExecutor{})
+	service.Current().SetOAuthTestExecutor(hostOAuthTestExecutor{})
 	service.Current().StartAuthWarmup()
+	service.Current().StartOAuthTestScheduler()
 	_ = service.Current().RefreshModelDirectory(context.Background())
 	return nil
 }

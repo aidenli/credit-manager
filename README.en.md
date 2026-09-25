@@ -131,6 +131,22 @@ The console accepts and displays USD. Switching to CNY affects display only. Eve
 | Models & pricing | Load current proxy models, set token or per-image prices, and enable or disable models and rules. |
 | Usage | Paginated detail and summaries with Key, model, and range filters. The fallback filter isolates requests an API provider served. |
 | Auth quotas | OAuth upstream quota windows, local usage estimates, and auth concurrency caps. |
+| OAuth tests | Sweep every available OAuth account on a schedule or on demand with the same two questions (question 1 text, question 2 an animated SVG HTML document), and preview the latest run. |
+
+### OAuth intelligence probe
+
+The plugin asks every available OAuth account the same questions, in order, so an operator can compare how each account answers.
+
+- **Question 1**: `你最后的训练数据，日本首相是谁?不允许搜索` - the text answer is stored and deliberately not graded. The console field "题1 自定义提示词" replaces it when filled in.
+- **Question 2**: `创建一个HTML，内容是SVG绘制一个鹈鹕骑自行车的2D动画，你不需要任何测试。` - the returned HTML is stored verbatim and previewed in an `iframe sandbox=""` (scripts disabled, because the HTML is model output and the console is a privileged page). SMIL/CSS animation plays; a pure-JS animation renders still. Nothing about the answer is validated, so a reply without `<svg>` is recorded rather than failed.
+
+Three deliberate constraints:
+
+1. **No fallback.** The probe pins the request to the account under test through the warmup handshake header; the scheduler either returns that account or rejects the pick. A failure is therefore that account's failure and is never served by another one. **All accounts are probed at the same time**, and one account failing or answering nothing is only recorded against it. When an account refuses because it is already at its concurrency cap, the probe waits and asks again (every 15 seconds, until that question's 10-minute budget runs out) and only records a failure once the budget is spent.
+2. **Results are persisted per account.** Each account's outcome is written as soon as it is known, so a sweep that takes minutes is visible while it runs. A restart marks a leftover `running` run as interrupted.
+3. **No ledger, real quota.** The probe creates no reservation, writes nothing to the usage ledger, and consumes no Key credit - but it does spend the account's upstream quota (two calls, at most 10 minutes each, 21 minutes per account).
+
+The schedule is **disabled by default** with a 60-minute interval (1-1440). Once enabled it sweeps on that interval; saving settings rebuilds the timer without interrupting a sweep in flight.
 
 The usage tab also lists released attempts at the bottom: holds that were released instead of settled, with the release reason and the upstream text. Retries hide most of them from clients; only the last attempt of a failing request reaches one.
 
@@ -250,6 +266,10 @@ Endpoints do not use `/keys/{id}` path parameters. Pass management record IDs th
 | POST | `/auth-quotas/refresh` | Refresh auth-quota snapshots |
 | POST | `/auth-quotas/concurrency` | Set one auth's max concurrency |
 | POST | `/auth-quotas/concurrency/batch` | Batch-set auth max concurrency |
+| GET / POST | `/oauth-tests/settings` | Read or save the probe schedule: enable switch, interval, model, thinking intensity and the custom question 1 |
+| GET | `/oauth-tests/latest` | Latest probe run, including each account's question 1 text and question 2 HTML |
+| POST | `/oauth-tests/run` | Start a sweep now (conflicts while one is running) |
+| POST | `/oauth-tests/stop` | Stop the sweep in flight (the schedule keeps running) |
 
 Key mint, rotation, and reveal responses, plus auth-quota responses, include `Cache-Control: no-store`.
 
