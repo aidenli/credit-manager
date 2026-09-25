@@ -133,3 +133,67 @@ func TestOAuthTestResultRequiresAuthID(t *testing.T) {
 		t.Fatal("a result without an auth id must be rejected")
 	}
 }
+
+// v1.8.18 stored a sweep as a list of per-account results. Those rows must still
+// be readable: the operator already paid for those calls, and a decode failure
+// would take the whole console tab down.
+func TestOAuthTestResultsReadTheOlderSweepShape(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	defer st.Close()
+
+	done := time.Now().UTC().Truncate(time.Second)
+	legacy := `{"id":"run-1","status":"succeeded","model":"gpt-6-astra","started_at":"` + done.Add(-time.Minute).Format(time.RFC3339) + `","completed_at":"` + done.Format(time.RFC3339) + `","results":[` +
+		`{"provider":"codex","auth_id":"codex-a.json","display_name":"a","status":"succeeded","question1":"旧题1 A","question2_html":"<svg>A</svg>","started_at":"` + done.Format(time.RFC3339) + `"},` +
+		`{"provider":"codex","auth_id":"codex-b.json","display_name":"b","status":"failed","error":"上游返回 HTTP 503","started_at":"` + done.Format(time.RFC3339) + `"}]}`
+	if _, err := st.db.ExecContext(ctx, `INSERT INTO oauth_test_state(id, config_json, latest_json, updated_at_unix_ms) VALUES(1, '{}', ?, ?)`, legacy, done.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := st.GetOAuthTestResults(ctx)
+	if err != nil {
+		t.Fatalf("an older sweep must still decode: %v", err)
+	}
+	if len(results) != 2 || results["codex-a.json"].Question1 != "旧题1 A" || results["codex-b.json"].Error == "" {
+		t.Fatalf("migrated results = %#v", results)
+	}
+	// An older sweep recorded the model once, for the whole run.
+	if results["codex-a.json"].Model != "gpt-6-astra" {
+		t.Fatalf("model was not carried over from the sweep: %#v", results["codex-a.json"])
+	}
+
+	// Saving one account on top of the migrated rows keeps the rest, and writes
+	// the shape the console now expects.
+	if err := st.SaveOAuthTestResult(ctx, OAuthTestResult{
+		Provider: "codex", AuthID: "codex-c.json", DisplayName: "c", Status: "succeeded",
+		Question1: "新题1 C", StartedAt: done, CompletedAt: &done,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	results, err = st.GetOAuthTestResults(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 3 || results["codex-a.json"].Question1 != "旧题1 A" || results["codex-c.json"].Question1 != "新题1 C" {
+		t.Fatalf("results after the migration = %#v", results)
+	}
+}
+
+// Unreadable content reads as "no results" instead of failing the whole tab.
+func TestOAuthTestResultsTolerateGarbage(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	defer st.Close()
+	for _, raw := range []string{`not json`, `{"results":"nonsense"}`, `{"results":[]}`, `{}`} {
+		if _, err := st.db.ExecContext(ctx, `INSERT OR REPLACE INTO oauth_test_state(id, config_json, latest_json, updated_at_unix_ms) VALUES(1, '{}', ?, 0)`, raw); err != nil {
+			t.Fatal(err)
+		}
+		results, err := st.GetOAuthTestResults(ctx)
+		if err != nil {
+			t.Fatalf("%s must not error: %v", raw, err)
+		}
+		if len(results) != 0 {
+			t.Fatalf("%s decodes to %#v", raw, results)
+		}
+	}
+}

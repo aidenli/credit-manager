@@ -174,14 +174,37 @@ func (s *Store) GetOAuthTestResults(ctx context.Context) (map[string]OAuthTestRe
 	if trimmed == "" || trimmed == "{}" {
 		return map[string]OAuthTestResult{}, nil
 	}
-	var state oauthTestState
-	if err := json.Unmarshal([]byte(trimmed), &state); err != nil {
-		return nil, fmt.Errorf("decode oauth test results: %w", err)
+	// oauth_test_state.latest_json changed shape: v1.8.18 stored one sweep as a
+	// list of per-account results, later versions store the latest result of every
+	// account keyed by auth id. Both are read here, and anything unreadable reads
+	// as "no results" - a bad row must never take the whole console tab down.
+	var state struct {
+		Results json.RawMessage `json:"results"`
+		Model   string          `json:"model"`
 	}
-	if state.Results == nil {
+	if err := json.Unmarshal([]byte(trimmed), &state); err != nil || len(state.Results) == 0 {
 		return map[string]OAuthTestResult{}, nil
 	}
-	return state.Results, nil
+	byAuthID := map[string]OAuthTestResult{}
+	if err := json.Unmarshal(state.Results, &byAuthID); err == nil {
+		return byAuthID, nil
+	}
+	var sweep []OAuthTestResult
+	if err := json.Unmarshal(state.Results, &sweep); err != nil {
+		return map[string]OAuthTestResult{}, nil
+	}
+	for _, item := range sweep {
+		authID := strings.TrimSpace(item.AuthID)
+		if authID == "" {
+			continue
+		}
+		if strings.TrimSpace(item.Model) == "" {
+			// An older sweep recorded the model once, for the whole run.
+			item.Model = strings.TrimSpace(state.Model)
+		}
+		byAuthID[authID] = item
+	}
+	return byAuthID, nil
 }
 
 // oauthTestResultsMu serializes the read-modify-write of the results map. Probes
