@@ -2,6 +2,7 @@ package management
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -15,14 +16,72 @@ import (
 // OAuth intelligence probe endpoints. The console renders one card per account,
 // so the state endpoint answers with the schedule plus every account and its
 // latest result.
+//
+// The question-2 document travels base64-encoded. The host escapes every string
+// value of a management JSON response while a plugin registers an RPC schema
+// below SchemaVersionRawManagementResponse (we negotiate 2, the host wants 6),
+// which turns "<!DOCTYPE html>" into "&lt;!DOCTYPE html&gt;" and renders the
+// preview as a page of source code. Base64's alphabet contains none of the
+// characters that escaping touches, so the document survives the host intact.
 
 // oauthTestAccountsView is the payload behind the console's account cards.
 type oauthTestAccountsView struct {
-	Settings      any                        `json:"settings"`
-	Accounts      []service.OAuthTestAccount `json:"accounts"`
-	ServerTimeUTC string                     `json:"server_time_utc"`
-	Question1     string                     `json:"question1"`
-	Question2     string                     `json:"question2"`
+	Settings      any                    `json:"settings"`
+	Accounts      []oauthTestAccountView `json:"accounts"`
+	ServerTimeUTC string                 `json:"server_time_utc"`
+	Question1     string                 `json:"question1"`
+	Question2     string                 `json:"question2"`
+}
+
+// oauthTestAccountView is one card: the account, whether a probe runs, and its
+// latest result without the document itself.
+type oauthTestAccountView struct {
+	Provider    string               `json:"provider"`
+	AuthID      string               `json:"auth_id"`
+	AuthIndex   string               `json:"auth_index,omitempty"`
+	DisplayName string               `json:"display_name"`
+	Status      string               `json:"status"`
+	Running     bool                 `json:"running"`
+	Result      *oauthTestResultView `json:"result,omitempty"`
+}
+
+type oauthTestResultView struct {
+	Status        string `json:"status"`
+	Question1     string `json:"question1,omitempty"`
+	Error         string `json:"error,omitempty"`
+	Model         string `json:"model,omitempty"`
+	Question2File string `json:"question2_file,omitempty"`
+	// Question2Base64 is the extracted document, ready for the console to turn
+	// back into a blob. Empty when the answer held nothing HTML-shaped.
+	Question2Base64 string     `json:"question2_base64,omitempty"`
+	StartedAt       time.Time  `json:"started_at"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
+}
+
+func newOAuthTestAccountView(account service.OAuthTestAccount) oauthTestAccountView {
+	view := oauthTestAccountView{
+		Provider:    account.Provider,
+		AuthID:      account.AuthID,
+		AuthIndex:   account.AuthIndex,
+		DisplayName: account.DisplayName,
+		Status:      account.Status,
+		Running:     account.Running,
+	}
+	if account.Result == nil {
+		return view
+	}
+	result := account.Result
+	view.Result = &oauthTestResultView{
+		Status:          result.Status,
+		Question1:       result.Question1,
+		Error:           result.Error,
+		Model:           result.Model,
+		Question2File:   result.Question2File,
+		Question2Base64: base64.StdEncoding.EncodeToString([]byte(result.Question2HTML)),
+		StartedAt:       result.StartedAt,
+		CompletedAt:     result.CompletedAt,
+	}
+	return view
 }
 
 // oauthTestState answers the card list. `?auth_ids=a,b` narrows it to the
@@ -46,10 +105,14 @@ func oauthTestState(ctx context.Context, svc *service.Service, req pluginapi.Man
 		}
 		accounts = filtered
 	}
+	cards := make([]oauthTestAccountView, 0, len(accounts))
+	for _, account := range accounts {
+		cards = append(cards, newOAuthTestAccountView(account))
+	}
 	question1, question2 := service.OAuthTestQuestions()
 	return jsonOKNoStore(oauthTestAccountsView{
 		Settings:      settings,
-		Accounts:      accounts,
+		Accounts:      cards,
 		ServerTimeUTC: time.Now().UTC().Format(time.RFC3339),
 		Question1:     question1,
 		Question2:     question2,

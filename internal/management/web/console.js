@@ -1560,17 +1560,39 @@
       default: return '未测试';
     }
   }
+  // 题2 文档以 base64 传输：宿主对 ABI 兼容模式下管理响应的 JSON 字符串做 HTML
+  // 转义，原文直传会把 <!DOCTYPE html> 变成 &lt;!DOCTYPE html&gt;，预览就只剩代码。
+  function oauthTestDocumentBytes(result) {
+    const encoded = (result && result.question2_base64) || '';
+    if (encoded) {
+      try {
+        const binary = atob(encoded);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return bytes;
+      } catch (err) {
+        return null;
+      }
+    }
+    // 兼容旧 payload：明文只在没有 base64 时才用，且会被宿主转义。
+    const plain = (result && result.question2_html) || '';
+    return plain ? new TextEncoder().encode(plain) : null;
+  }
   function oauthTestPreviewURL(account) {
-    const html = (account.result && account.result.question2_html) || '';
-    if (!html) return '';
+    const result = (account && account.result) || {};
+    const document = result.question2_base64 || result.question2_html || '';
+    if (!document) return '';
+    const signature = document.length + ':' + document.slice(0, 64);
     const cache = state.oauthTestBlobs || (state.oauthTestBlobs = {});
     const cached = cache[account.auth_id];
-    if (cached && cached.html === html) return cached.url;
+    if (cached && cached.signature === signature) return cached.url;
+    const bytes = oauthTestDocumentBytes(result);
+    if (!bytes) return '';
     if (cached) {
       try { URL.revokeObjectURL(cached.url); } catch (err) { /* already gone */ }
     }
-    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
-    cache[account.auth_id] = { html: html, url: url };
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'text/html' }));
+    cache[account.auth_id] = { signature: signature, url: url, bytes: bytes };
     return url;
   }
   // 测试耗时：从探针开始到两道题都返回。
@@ -1619,7 +1641,7 @@
       + '</div>'
       + '<div class="oauth-test-card-actions">'
       + '<button class="btn sm" data-oauth-test-run="' + esc(account.auth_id) + '"' + (account.running ? ' disabled' : '') + '>测试</button>'
-      + (result.question2_html ? '<button class="btn ghost sm" data-oauth-test-download="' + esc(account.auth_id) + '">下载 HTML</button>' : '')
+      + ((result.question2_base64 || result.question2_html) ? '<button class="btn ghost sm" data-oauth-test-download="' + esc(account.auth_id) + '">下载 HTML</button>' : '')
       + '</div>'
       + '</div>'
       + '<div class="hint oauth-test-card-meta">' + esc(oauthTestMetaLabel(account, result, status)) + '</div>'
@@ -1716,9 +1738,11 @@
   }
   function downloadOAuthTestHTML(authID) {
     const account = oauthTestCardsByAuthID()[authID];
-    const html = (account && account.result && account.result.question2_html) || '';
-    if (!html) { flash('该账号还没有可下载的 HTML', false); return; }
-    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    const result = (account && account.result) || {};
+    const cached = (state.oauthTestBlobs || {})[authID];
+    const bytes = (cached && cached.bytes) || oauthTestDocumentBytes(result);
+    if (!bytes) { flash('该账号还没有可下载的 HTML', false); return; }
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'text/html' }));
     const link = document.createElement('a');
     link.href = url;
     link.download = String(authID).replace(/[^a-zA-Z0-9._-]+/g, '-') + '.html';

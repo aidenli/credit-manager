@@ -2,10 +2,13 @@ package management
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	"github.com/yuluo688/credit-manager/internal/service"
@@ -114,6 +117,50 @@ func TestOAuthTestStateEndpointListsAccountsAndQuestions(t *testing.T) {
 	}
 	if len(view.Accounts) != 1 || view.Accounts[0].Status != "untested" || view.Accounts[0].Running {
 		t.Fatalf("cards = %#v", view.Accounts)
+	}
+}
+
+// The question-2 document must survive the host's HTML escaping of management
+// JSON, which is why it travels base64-encoded. A payload carrying the raw
+// document renders as a page of source code in the console's preview.
+func TestOAuthTestStateShipsTheDocumentAsBase64(t *testing.T) {
+	completed := time.Now().UTC().Truncate(time.Second)
+	document := "<!DOCTYPE html>\n<html><body><svg><circle r=\"1\"/></svg></body></html>"
+	view := newOAuthTestAccountView(service.OAuthTestAccount{
+		Provider: "codex", AuthID: "codex-a.json", DisplayName: "a", Status: "succeeded",
+		Result: &store.OAuthTestResult{
+			Provider: "codex", AuthID: "codex-a.json", DisplayName: "a", Status: "succeeded",
+			Question1: "日本首相是谁", Question2HTML: document, Question2File: "/data/oauth-tests/a.html",
+			Model: "gpt-6-astra", StartedAt: completed, CompletedAt: &completed,
+		},
+	})
+
+	encoded, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "question2_html") {
+		t.Fatalf("the raw document must not travel as JSON: %s", encoded)
+	}
+	if view.Result == nil || view.Result.Question2Base64 == "" {
+		t.Fatalf("view = %#v", view)
+	}
+	// None of the characters the host escapes may appear in the payload value.
+	if strings.ContainsAny(view.Result.Question2Base64, `<>&"'`) {
+		t.Fatalf("base64 payload would be corrupted by host escaping: %q", view.Result.Question2Base64)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(view.Result.Question2Base64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded) != document {
+		t.Fatalf("decoded = %q, want %q", decoded, document)
+	}
+
+	// A card without a document ships no payload at all.
+	empty := newOAuthTestAccountView(service.OAuthTestAccount{AuthID: "codex-b.json", Result: &store.OAuthTestResult{AuthID: "codex-b.json", Status: "failed"}})
+	if empty.Result == nil || empty.Result.Question2Base64 != "" {
+		t.Fatalf("empty card = %#v", empty.Result)
 	}
 }
 
