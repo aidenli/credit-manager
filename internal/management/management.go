@@ -51,9 +51,8 @@ func Routes() []pluginapi.ManagementRoute {
 		{http.MethodGet, "credit-manager/auth-accounts"},
 		{http.MethodPost, "credit-manager/auth-quotas/concurrency"},
 		{http.MethodPost, "credit-manager/auth-quotas/concurrency/batch"},
-		{http.MethodGet, "credit-manager/oauth-tests/settings"},
+		{http.MethodGet, "credit-manager/oauth-tests"},
 		{http.MethodPost, "credit-manager/oauth-tests/settings"},
-		{http.MethodGet, "credit-manager/oauth-tests/latest"},
 		{http.MethodPost, "credit-manager/oauth-tests/run"},
 		{http.MethodPost, "credit-manager/oauth-tests/stop"},
 	}
@@ -194,14 +193,12 @@ func Handle(ctx context.Context, req pluginapi.ManagementRequest) (pluginapi.Man
 		return updateAuthQuotaConcurrencyBatch(ctx, svc, req.Body)
 	case req.Method == http.MethodPost && path == "credit-manager/auth-quotas/concurrency":
 		return updateAuthQuotaConcurrency(ctx, svc, req.Body)
-	case req.Method == http.MethodGet && path == "credit-manager/oauth-tests/settings":
-		return getOAuthTestSettings(ctx, svc)
+	case req.Method == http.MethodGet && path == "credit-manager/oauth-tests":
+		return oauthTestState(ctx, svc, req)
 	case req.Method == http.MethodPost && path == "credit-manager/oauth-tests/settings":
 		return updateOAuthTestSettings(ctx, svc, req.Body)
-	case req.Method == http.MethodGet && path == "credit-manager/oauth-tests/latest":
-		return latestOAuthTests(ctx, svc)
 	case req.Method == http.MethodPost && path == "credit-manager/oauth-tests/run":
-		return runOAuthTests(ctx, svc)
+		return runOAuthTests(ctx, svc, req.Body)
 	case req.Method == http.MethodPost && path == "credit-manager/oauth-tests/stop":
 		return stopOAuthTests(ctx, svc)
 	default:

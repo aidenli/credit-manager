@@ -47,11 +47,9 @@ func TestOAuthTestProbePinsAccountAndAsksBothQuestions(t *testing.T) {
 
 	executor := hostOAuthTestExecutor{}
 	answer, err := executor.ExecuteOAuthTest(context.Background(), service.OAuthTestRequest{
-		RunID:             "run-1",
 		Auth:              store.AuthIdentity{AuthID: "codex-a@example.com-pro.json", Provider: "codex"},
 		Model:             "gpt-6-astra",
 		ThinkingIntensity: "high",
-		Prompt:            "自定义题1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +77,7 @@ func TestOAuthTestProbePinsAccountAndAsksBothQuestions(t *testing.T) {
 			t.Fatalf("call %d sent the Responses-only reasoning object: %s", i, req.Body)
 		}
 	}
-	if !strings.Contains(string(requests[0].Body), "自定义题1") {
+	if !strings.Contains(string(requests[0].Body), "日本首相") {
 		t.Fatalf("first question = %s", requests[0].Body)
 	}
 	if !strings.Contains(string(requests[1].Body), "鹈鹕骑自行车") {
@@ -128,7 +126,6 @@ func TestOAuthTestProbeWaitsWhileTheAccountIsBusy(t *testing.T) {
 	}
 
 	answer, err := hostOAuthTestExecutor{}.ExecuteOAuthTest(context.Background(), service.OAuthTestRequest{
-		RunID: "run-busy",
 		Auth:  store.AuthIdentity{AuthID: "codex-busy@example.com-pro.json", Provider: "codex"},
 		Model: "gpt-6-astra",
 	})
@@ -173,7 +170,6 @@ func TestOAuthTestProbeDoesNotRetryRealFailures(t *testing.T) {
 		return nil, 0, errors.New("host_call_failed: 上游返回 HTTP 400 bad request")
 	}
 	if _, err := (hostOAuthTestExecutor{}).ExecuteOAuthTest(context.Background(), service.OAuthTestRequest{
-		RunID: "run-fail",
 		Auth:  store.AuthIdentity{AuthID: "codex-fail@example.com-pro.json", Provider: "codex"},
 		Model: "gpt-6-astra",
 	}); err == nil {
@@ -207,14 +203,26 @@ func TestExtractOAuthTestTextReadsEveryResponseShape(t *testing.T) {
 	}
 }
 
-func TestNormalizeOAuthTestHTMLStripsCodeFence(t *testing.T) {
-	fenced := "```html\n<svg><circle r=\"1\"/></svg>\n```"
-	if got := normalizeOAuthTestHTML(fenced); got != `<svg><circle r="1"/></svg>` {
-		t.Fatalf("fenced = %q", got)
+// The answer arrives wrapped in prose or a fence often enough that storing it
+// verbatim would only ever render as text, so the document itself is extracted.
+func TestExtractOAuthTestHTMLPullsTheDocumentOut(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"fenced", "```html\n<svg><circle r=\"1\"/></svg>\n```", `<svg><circle r="1"/></svg>`},
+		{"fenced without language", "```\n<html><body>x</body></html>\n```", "<html><body>x</body></html>"},
+		{"leading prose", "好的，下面是实现：\n<!DOCTYPE html>\n<html><body><svg></svg></body></html>\n希望有帮助。", "<!DOCTYPE html>\n<html><body><svg></svg></body></html>"},
+		{"bare svg", "这是一个动画：<svg width=\"10\"><circle r=\"1\"/></svg>", `<svg width="10"><circle r="1"/></svg>`},
+		{"plain", "  <svg></svg>  ", "<svg></svg>"},
+		{"no html at all", "我无法完成这个任务。", "我无法完成这个任务。"},
+		{"empty", "   ", ""},
 	}
-	plain := "  <svg></svg>  "
-	if got := normalizeOAuthTestHTML(plain); got != "<svg></svg>" {
-		t.Fatalf("plain = %q", got)
+	for _, tc := range cases {
+		if got := extractOAuthTestHTML(tc.raw); got != tc.want {
+			t.Fatalf("%s = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 

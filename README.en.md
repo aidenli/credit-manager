@@ -131,22 +131,24 @@ The console accepts and displays USD. Switching to CNY affects display only. Eve
 | Models & pricing | Load current proxy models, set token or per-image prices, and enable or disable models and rules. |
 | Usage | Paginated detail and summaries with Key, model, and range filters. The fallback filter isolates requests an API provider served. |
 | Auth quotas | OAuth upstream quota windows, local usage estimates, and auth concurrency caps. |
-| OAuth tests | Sweep every available OAuth account on a schedule or on demand with the same two questions (question 1 text, question 2 an animated SVG HTML document), and preview the latest run. |
+| OAuth tests | One card per available OAuth account: the same two fixed questions (question 1 text, question 2 an animated SVG document) asked daily or on demand, with each account's result on its card |
 
 ### OAuth intelligence probe
 
-The plugin asks every available OAuth account the same questions, in order, so an operator can compare how each account answers.
+The plugin gives every available OAuth account a card and asks all of them the same questions, at the same time, so an operator can compare how each account answers.
 
-- **Question 1**: `你最后的训练数据，日本首相是谁?不允许搜索` - the text answer is stored and deliberately not graded. The console field "题1 自定义提示词" replaces it when filled in.
-- **Question 2**: `创建一个HTML，内容是SVG绘制一个鹈鹕骑自行车的2D动画，你不需要任何测试。` - the returned HTML is stored verbatim and previewed in an `iframe sandbox=""` (scripts disabled, because the HTML is model output and the console is a privileged page). SMIL/CSS animation plays; a pure-JS animation renders still. Nothing about the answer is validated, so a reply without `<svg>` is recorded rather than failed.
+- **Question 1**: `你最后的训练数据，日本首相是谁?不允许搜索` - the text answer is stored and deliberately not graded.
+- **Question 2**: `创建一个HTML，内容是SVG绘制一个鹈鹕骑自行车的2D动画，你不需要任何测试。` - the plugin first **extracts the HTML** from the answer (a fenced block, else a whole `<!DOCTYPE html>…</html>`, else a bare `<svg>…</svg>`; when none is found the answer is kept verbatim so the operator can see what actually came back), **writes the extracted document to a `.html` file** under `oauth-tests/` in the data directory (the card shows the path and offers "下载 HTML"), and runs it in the card as a **real document** through a blob URL (`sandbox="allow-scripts"`: scripts are allowed, but `allow-same-origin` is not, so the document sits in an **opaque origin** and cannot touch this console's DOM, cookies or localStorage; the accepted cost is that model JavaScript may fetch from the network, and the benefit is that JS animation and a model's own pause button work). CSS/SMIL animation plays either way. Nothing about the answer is validated, so a reply without `<svg>` is recorded rather than failed.
+
+Both questions are fixed and there is no custom prompt: the console compares accounts, so every account must be asked the same thing.
 
 Three deliberate constraints:
 
 1. **No fallback.** The probe pins the request to the account under test through the warmup handshake header; the scheduler either returns that account or rejects the pick. A failure is therefore that account's failure and is never served by another one. **All accounts are probed at the same time**, and one account failing or answering nothing is only recorded against it. When an account refuses because it is already at its concurrency cap, the probe waits and asks again (every 15 seconds, until that question's 10-minute budget runs out) and only records a failure once the budget is spent.
-2. **Results are persisted per account.** Each account's outcome is written as soon as it is known, so a sweep that takes minutes is visible while it runs. A restart marks a leftover `running` run as interrupted.
-3. **No ledger, real quota.** The probe creates no reservation, writes nothing to the usage ledger, and consumes no Key credit - but it does spend the account's upstream quota (two calls, at most 10 minutes each, 21 minutes per account).
+2. **Results are stored per account.** Each account's outcome is written as soon as it is known, and testing one card replaces only that card; a restart keeps every card's latest result. Each card states when that account was **tested** (in the operator's local time) and how long the probe **took**. While probes are running, the console asks every 5 seconds **only for the accounts that have not finished** and replaces just those cards, so nothing else on the page is re-rendered or reloaded.
+3. **No ledger, real quota.** The probe creates no reservation, writes nothing to the usage ledger, and consumes no Key credit - but it does spend the account's upstream quota (two calls, at most 10 minutes each).
 
-The schedule is **disabled by default** with a 60-minute interval (1-1440). Once enabled it sweeps on that interval; saving settings rebuilds the timer without interrupting a sweep in flight.
+Schedule: the toolbar has an **enable daily schedule** switch and a run time shown in the operator's **browser-local time** (converted to UTC before saving, so the server's timezone never shifts it); press "保存设置" to apply. With the schedule off, only "测试全部账号" or a card's "测试" button spends anything. The schedule is **disabled by default**, and saving settings rebuilds the timer without interrupting probes already in flight.
 
 The usage tab also lists released attempts at the bottom: holds that were released instead of settled, with the release reason and the upstream text. Retries hide most of them from clients; only the last attempt of a failing request reaches one.
 
@@ -266,10 +268,10 @@ Endpoints do not use `/keys/{id}` path parameters. Pass management record IDs th
 | POST | `/auth-quotas/refresh` | Refresh auth-quota snapshots |
 | POST | `/auth-quotas/concurrency` | Set one auth's max concurrency |
 | POST | `/auth-quotas/concurrency/batch` | Batch-set auth max concurrency |
-| GET / POST | `/oauth-tests/settings` | Read or save the probe schedule: enable switch, interval, model, thinking intensity and the custom question 1 |
-| GET | `/oauth-tests/latest` | Latest probe run, including each account's question 1 text and question 2 HTML |
-| POST | `/oauth-tests/run` | Start a sweep now (conflicts while one is running) |
-| POST | `/oauth-tests/stop` | Stop the sweep in flight (the schedule keeps running) |
+| GET | `/oauth-tests` | Card state: the daily schedule plus every available OAuth account's latest result and whether it is being probed; `?auth_ids=a,b` narrows it to those accounts (what the console polls for unfinished cards) |
+| POST | `/oauth-tests/settings` | Save the daily schedule (`enabled`, `hour_utc`, `minute_utc`) with model and thinking intensity |
+| POST | `/oauth-tests/run` | Probe now: an empty body tests every account, `{"auth_id":"..."}` tests one |
+| POST | `/oauth-tests/stop` | Stop the probes in flight (the daily schedule keeps running) |
 
 Key mint, rotation, and reveal responses, plus auth-quota responses, include `Cache-Control: no-store`.
 

@@ -131,7 +131,6 @@ func Open(ctx context.Context, cfg config.Config) (*Service, error) {
 		_ = svc.Close()
 		return nil, fmt.Errorf("release stale reservations: %w", err)
 	}
-	_ = svc.MarkOAuthTestInterrupted(ctx)
 	svc.RefreshModelDirectory(ctx)
 	return svc, nil
 }
@@ -219,7 +218,6 @@ func Configure(ctx context.Context, rawYAML []byte) error {
 		if _, err := next.cleanupStaleReservations(ctx, true); err != nil {
 			return fmt.Errorf("release stale reservations: %w", err)
 		}
-		_ = next.MarkOAuthTestInterrupted(ctx)
 		if !current.CompareAndSwap(old, next) {
 			return fmt.Errorf("service replaced concurrently during reconfigure")
 		}

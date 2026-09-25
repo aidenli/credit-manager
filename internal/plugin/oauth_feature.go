@@ -30,7 +30,7 @@ func (hostOAuthTestExecutor) ExecuteOAuthTest(ctx context.Context, request servi
 	if request.Auth.Empty() {
 		return service.OAuthTestAnswer{}, errors.New("目标 OAuth 不可用")
 	}
-	question1, question2 := service.OAuthTestQuestions(request.Prompt)
+	question1, question2 := service.OAuthTestQuestions()
 	answer1, err := runOAuthTestPrompt(ctx, request, question1)
 	if err != nil {
 		return service.OAuthTestAnswer{}, fmt.Errorf("题目1失败: %w", err)
@@ -44,7 +44,7 @@ func (hostOAuthTestExecutor) ExecuteOAuthTest(ctx context.Context, request servi
 	// reason the operator never asked for.
 	return service.OAuthTestAnswer{
 		Question1:     answer1,
-		Question2HTML: normalizeOAuthTestHTML(answer2),
+		Question2HTML: extractOAuthTestHTML(answer2),
 	}, nil
 }
 
@@ -115,7 +115,6 @@ func askPinnedAccount(ctx context.Context, request service.OAuthTestRequest, pro
 		}
 		now := time.Now().UTC()
 		registerWarmupLease(&warmupLease{
-			RunID:     request.RunID,
 			Nonce:     nonce,
 			Auth:      request.Auth,
 			Model:     request.Model,
@@ -302,13 +301,46 @@ func sseAssistantText(raw string) string {
 	return strings.TrimSpace(builder.String())
 }
 
-// htmlFence strips a Markdown code fence from an HTML answer.
-var htmlFence = regexp.MustCompile("(?is)^```(?:html)?\\s*(.*?)\\s*```$")
-
-func normalizeOAuthTestHTML(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if match := htmlFence.FindStringSubmatch(raw); len(match) == 2 {
-		return strings.TrimSpace(match[1])
+// extractOAuthTestHTML pulls the document out of a model answer. The answer
+// arrives wrapped in prose or a Markdown fence often enough that storing it
+// verbatim would only ever render as text, so the probe extracts the document
+// itself: a fenced block first, then a whole HTML document, then a bare SVG.
+// An answer that contains none of those is returned unchanged, because showing
+// the operator what actually came back beats showing an empty card.
+func extractOAuthTestHTML(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
 	}
-	return raw
+	if match := htmlFence.FindStringSubmatch(trimmed); len(match) == 2 {
+		if inner := strings.TrimSpace(match[1]); inner != "" {
+			return inner
+		}
+	}
+	lower := strings.ToLower(trimmed)
+	start := -1
+	for _, marker := range []string{"<!doctype", "<html"} {
+		if index := strings.Index(lower, marker); index >= 0 && (start < 0 || index < start) {
+			start = index
+		}
+	}
+	if start >= 0 {
+		document := trimmed[start:]
+		if end := strings.LastIndex(strings.ToLower(document), "</html>"); end >= 0 {
+			return strings.TrimSpace(document[:end+len("</html>")])
+		}
+		return strings.TrimSpace(document)
+	}
+	svgStart := strings.Index(lower, "<svg")
+	if svgStart < 0 {
+		return trimmed
+	}
+	svg := trimmed[svgStart:]
+	if end := strings.LastIndex(strings.ToLower(svg), "</svg>"); end >= 0 {
+		return strings.TrimSpace(svg[:end+len("</svg>")])
+	}
+	return strings.TrimSpace(svg)
 }
+
+// htmlFence matches a Markdown code fence, with or without a language tag.
+var htmlFence = regexp.MustCompile("(?is)^```[a-zA-Z0-9_-]*\\s*(.*?)\\s*```$")

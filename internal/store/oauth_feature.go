@@ -6,88 +6,86 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
-	// DefaultOAuthTestModel is the model the OAuth intelligence probe asks.
+	// DefaultOAuthTestModel is the model the probe asks.
 	DefaultOAuthTestModel = "gpt-6-astra"
 	// DefaultOAuthTestThinking is the thinking intensity the probe requests.
 	DefaultOAuthTestThinking = "high"
-	// DefaultOAuthTestIntervalMinutes is how often the probe runs when enabled.
-	DefaultOAuthTestIntervalMinutes = 60
-	// MinOAuthTestIntervalMinutes and MaxOAuthTestIntervalMinutes bound the
-	// operator's choice. The upper bound is one day so a daily sweep is
-	// expressible and anything slower is an explicit manual habit instead.
-	MinOAuthTestIntervalMinutes = 1
-	MaxOAuthTestIntervalMinutes = 1440
+	// DefaultOAuthTestHourUTC and DefaultOAuthTestMinuteUTC are 09:00 in UTC+8,
+	// the timezone this probe is used from. The console converts the operator's
+	// local time into UTC, so the schedule does not drift with the server's
+	// timezone.
+	DefaultOAuthTestHourUTC   = 1
+	DefaultOAuthTestMinuteUTC = 0
 )
 
-// oauthTestThinkingChoices are the intensities the probe may request. The
-// management console offers exactly these, so validation and UI cannot drift
-// apart again.
+// oauthTestThinkingChoices are the intensities the console offers, so validation
+// and UI cannot drift apart.
 var oauthTestThinkingChoices = []string{"high", "medium", "low"}
 
-// OAuthTestSettings is the probe schedule plus the request shape used for every
-// account in a run.
+// OAuthTestSettings is the daily schedule plus the request shape used for every
+// account. The probe runs once a day: it is a comparison tool, not a health
+// check, and hourly sweeps only spend upstream quota.
 type OAuthTestSettings struct {
-	Enabled           bool   `json:"enabled"`
-	IntervalMinutes   int    `json:"interval_minutes"`
-	Model             string `json:"model"`
-	ThinkingIntensity string `json:"thinking_intensity"`
-	// Prompt overrides both built-in questions when it is not empty.
-	Prompt    string     `json:"prompt,omitempty"`
-	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+	Enabled           bool       `json:"enabled"`
+	HourUTC           int        `json:"hour_utc"`
+	MinuteUTC         int        `json:"minute_utc"`
+	Model             string     `json:"model"`
+	ThinkingIntensity string     `json:"thinking_intensity"`
+	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
 }
 
-// OAuthTestResult is one account's outcome inside a run. Question2HTML is stored
-// as the model returned it: the console renders it in a sandboxed iframe, and
-// the probe deliberately does not grade it.
+// OAuthTestResult is one account's outcome. Question2HTML is stored exactly as
+// the model returned it: the console renders it in a sandboxed iframe and the
+// probe deliberately does not grade it.
 type OAuthTestResult struct {
-	Provider      string     `json:"provider"`
-	AuthID        string     `json:"auth_id"`
-	AuthIndex     string     `json:"auth_index,omitempty"`
-	DisplayName   string     `json:"display_name"`
-	Status        string     `json:"status"`
-	Question1     string     `json:"question1,omitempty"`
-	Question2HTML string     `json:"question2_html,omitempty"`
+	Provider      string `json:"provider"`
+	AuthID        string `json:"auth_id"`
+	AuthIndex     string `json:"auth_index,omitempty"`
+	DisplayName   string `json:"display_name"`
+	Status        string `json:"status"`
+	Question1     string `json:"question1,omitempty"`
+	Question2HTML string `json:"question2_html,omitempty"`
+	// Question2File is where the extracted document was written under the plugin
+	// data directory, so an operator can open or share the exact file the card
+	// previews. Empty when nothing HTML could be extracted or the write failed.
+	Question2File string     `json:"question2_file,omitempty"`
 	Error         string     `json:"error,omitempty"`
+	Model         string     `json:"model,omitempty"`
 	StartedAt     time.Time  `json:"started_at"`
 	CompletedAt   *time.Time `json:"completed_at,omitempty"`
 }
 
-// OAuthTestRun is one sweep across the available OAuth accounts. It stops at the
-// first failing account by design: a probe that fell back to another account
-// would measure the fallback instead of the account under test.
-type OAuthTestRun struct {
-	ID                string     `json:"id"`
-	Status            string     `json:"status"`
-	StartedAt         time.Time  `json:"started_at"`
-	CompletedAt       *time.Time `json:"completed_at,omitempty"`
-	Model             string     `json:"model"`
-	ThinkingIntensity string     `json:"thinking_intensity"`
-	// Prompt is the custom first question this run used, when one was set.
-	Prompt  string            `json:"prompt,omitempty"`
-	Error   string            `json:"error,omitempty"`
-	Results []OAuthTestResult `json:"results"`
+// oauthTestState is the JSON kept in oauth_test_state.latest_json: the most
+// recent result of every tested account, keyed by auth id.
+type oauthTestState struct {
+	Results map[string]OAuthTestResult `json:"results"`
 }
 
-// DefaultOAuthTestSettings is the schedule a fresh installation starts with:
-// configured, but not enabled, so nothing spends upstream quota until the
-// operator turns it on.
+// DefaultOAuthTestSettings is what a fresh installation starts with: a daily
+// time that is configured but not enabled, so nothing spends upstream quota
+// until the operator turns it on.
 func DefaultOAuthTestSettings() OAuthTestSettings {
 	return OAuthTestSettings{
 		Enabled:           false,
-		IntervalMinutes:   DefaultOAuthTestIntervalMinutes,
+		HourUTC:           DefaultOAuthTestHourUTC,
+		MinuteUTC:         DefaultOAuthTestMinuteUTC,
 		Model:             DefaultOAuthTestModel,
 		ThinkingIntensity: DefaultOAuthTestThinking,
 	}
 }
 
-// ValidateOAuthTestSettings rejects a schedule the scheduler could not honour.
+// ValidateOAuthTestSettings rejects a schedule the runner could not honour.
 func ValidateOAuthTestSettings(settings OAuthTestSettings) error {
-	if settings.IntervalMinutes < MinOAuthTestIntervalMinutes || settings.IntervalMinutes > MaxOAuthTestIntervalMinutes {
-		return fmt.Errorf("interval_minutes must be between %d and %d", MinOAuthTestIntervalMinutes, MaxOAuthTestIntervalMinutes)
+	if settings.HourUTC < 0 || settings.HourUTC > 23 {
+		return fmt.Errorf("hour_utc must be between 0 and 23")
+	}
+	if settings.MinuteUTC < 0 || settings.MinuteUTC > 59 {
+		return fmt.Errorf("minute_utc must be between 0 and 59")
 	}
 	if strings.TrimSpace(settings.Model) == "" {
 		return fmt.Errorf("model is required")
@@ -101,12 +99,7 @@ func ValidateOAuthTestSettings(settings OAuthTestSettings) error {
 	return fmt.Errorf("thinking_intensity must be one of %s", strings.Join(oauthTestThinkingChoices, ", "))
 }
 
-// normalizeOAuthTestSettings fills every unset field with its default so a
-// partial console payload cannot store an unusable schedule.
 func normalizeOAuthTestSettings(settings OAuthTestSettings) OAuthTestSettings {
-	if settings.IntervalMinutes == 0 {
-		settings.IntervalMinutes = DefaultOAuthTestIntervalMinutes
-	}
 	if strings.TrimSpace(settings.Model) == "" {
 		settings.Model = DefaultOAuthTestModel
 	}
@@ -115,7 +108,6 @@ func normalizeOAuthTestSettings(settings OAuthTestSettings) OAuthTestSettings {
 		settings.ThinkingIntensity = DefaultOAuthTestThinking
 	}
 	settings.ThinkingIntensity = strings.ToLower(strings.TrimSpace(settings.ThinkingIntensity))
-	settings.Prompt = strings.TrimSpace(settings.Prompt)
 	return settings
 }
 
@@ -132,8 +124,8 @@ func (s *Store) GetOAuthTestSettings(ctx context.Context) (OAuthTestSettings, er
 	if err != nil {
 		return settings, fmt.Errorf("get oauth test settings: %w", err)
 	}
-	if strings.TrimSpace(raw) != "" && strings.TrimSpace(raw) != "{}" {
-		if err := json.Unmarshal([]byte(raw), &settings); err != nil {
+	if trimmed := strings.TrimSpace(raw); trimmed != "" && trimmed != "{}" {
+		if err := json.Unmarshal([]byte(trimmed), &settings); err != nil {
 			return DefaultOAuthTestSettings(), fmt.Errorf("decode oauth test settings: %w", err)
 		}
 	}
@@ -145,9 +137,8 @@ func (s *Store) GetOAuthTestSettings(ctx context.Context) (OAuthTestSettings, er
 	return settings, nil
 }
 
-// UpsertOAuthTestSettings stores the schedule. The two columns of
-// oauth_test_state are written independently, so saving settings never discards
-// the latest run and vice versa.
+// UpsertOAuthTestSettings stores the schedule. Settings and results live in
+// separate columns, so saving one never discards the other.
 func (s *Store) UpsertOAuthTestSettings(ctx context.Context, settings OAuthTestSettings) (OAuthTestSettings, error) {
 	settings = normalizeOAuthTestSettings(settings)
 	if err := ValidateOAuthTestSettings(settings); err != nil {
@@ -168,10 +159,54 @@ func (s *Store) UpsertOAuthTestSettings(ctx context.Context, settings OAuthTestS
 	return settings, nil
 }
 
-// SaveOAuthTestRun stores the latest run. The probe saves after every account so
-// the console can show progress while a sweep is still in flight.
-func (s *Store) SaveOAuthTestRun(ctx context.Context, run OAuthTestRun) error {
-	raw, err := json.Marshal(run)
+// GetOAuthTestResults returns the most recent result of every tested account,
+// keyed by auth id.
+func (s *Store) GetOAuthTestResults(ctx context.Context) (map[string]OAuthTestResult, error) {
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT latest_json FROM oauth_test_state WHERE id=1`).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return map[string]OAuthTestResult{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get oauth test results: %w", err)
+	}
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || trimmed == "{}" {
+		return map[string]OAuthTestResult{}, nil
+	}
+	var state oauthTestState
+	if err := json.Unmarshal([]byte(trimmed), &state); err != nil {
+		return nil, fmt.Errorf("decode oauth test results: %w", err)
+	}
+	if state.Results == nil {
+		return map[string]OAuthTestResult{}, nil
+	}
+	return state.Results, nil
+}
+
+// oauthTestResultsMu serializes the read-modify-write of the results map. Probes
+// finish at the same time by design, and a lost update would silently erase one
+// account's card. The plugin owns the database exclusively, so a process-local
+// lock is enough.
+var oauthTestResultsMu sync.Mutex
+
+// SaveOAuthTestResult records one account's outcome while every other account
+// keeps its last result. The probe writes after every account so the console can
+// show progress during a sweep.
+func (s *Store) SaveOAuthTestResult(ctx context.Context, result OAuthTestResult) error {
+	authID := strings.TrimSpace(result.AuthID)
+	if authID == "" {
+		return fmt.Errorf("oauth test result needs an auth id")
+	}
+	oauthTestResultsMu.Lock()
+	defer oauthTestResultsMu.Unlock()
+
+	results, err := s.GetOAuthTestResults(ctx)
+	if err != nil {
+		return err
+	}
+	results[authID] = result
+	raw, err := json.Marshal(oauthTestState{Results: results})
 	if err != nil {
 		return err
 	}
@@ -180,39 +215,7 @@ func (s *Store) SaveOAuthTestRun(ctx context.Context, run OAuthTestRun) error {
 		return fmt.Errorf("init oauth test state: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE oauth_test_state SET latest_json=?, updated_at_unix_ms=? WHERE id=1`, string(raw), now.UnixMilli()); err != nil {
-		return fmt.Errorf("save oauth test run: %w", err)
+		return fmt.Errorf("save oauth test result: %w", err)
 	}
 	return nil
-}
-
-// GetLatestOAuthTestRun returns the most recent run, or a zero value when none
-// has been recorded.
-func (s *Store) GetLatestOAuthTestRun(ctx context.Context) (OAuthTestRun, error) {
-	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT latest_json FROM oauth_test_state WHERE id=1`).Scan(&raw)
-	if err == sql.ErrNoRows || strings.TrimSpace(raw) == "" || strings.TrimSpace(raw) == "{}" {
-		return OAuthTestRun{}, nil
-	}
-	if err != nil {
-		return OAuthTestRun{}, fmt.Errorf("get oauth test run: %w", err)
-	}
-	var run OAuthTestRun
-	if err := json.Unmarshal([]byte(raw), &run); err != nil {
-		return OAuthTestRun{}, fmt.Errorf("decode oauth test run: %w", err)
-	}
-	return run, nil
-}
-
-// MarkOAuthTestInterrupted closes a run that the previous process left running,
-// because a sweep cannot survive a plugin restart.
-func (s *Store) MarkOAuthTestInterrupted(ctx context.Context) error {
-	run, err := s.GetLatestOAuthTestRun(ctx)
-	if err != nil || run.Status != "running" {
-		return err
-	}
-	now := time.Now().UTC()
-	run.Status = "failed"
-	run.Error = "服务重启导致测试中断"
-	run.CompletedAt = &now
-	return s.SaveOAuthTestRun(ctx, run)
 }

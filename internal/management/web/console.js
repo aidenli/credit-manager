@@ -1501,64 +1501,180 @@
     return data;
   }
 
-  // OAuth intelligence probe: the run is a sweep over accounts, and each account
-  // carries question1 (text) plus question2_html (previewed in a sandboxed
-  // iframe). The iframe stays script-disabled: the HTML is model output, and the
-  // console is a privileged page.
-  function oauthTestRun() {
-    const run = state.oauthTestsLatest || {};
-    return run && typeof run === 'object' ? run : {};
+  // OAuth intelligence probe. One card per account: its labels, its latest result,
+  // a button that tests just that account, and a download for the saved document.
+  // question2_html is extracted from the model answer and previewed as a real
+  // document through a blob URL - an iframe src cannot carry the management key,
+  // so the console fetches the text and hands the browser the same bytes.
+  //
+  // sandbox="allow-scripts" on purpose: model answers animate with JavaScript
+  // often enough (and ship their own pause button) that a script-disabled preview
+  // would freeze exactly the part being judged. Without allow-same-origin the
+  // frame keeps an opaque origin, so the document cannot touch this console's DOM,
+  // storage or cookies; the accepted cost is that the document may fetch from the
+  // network.
+  function oauthTestTimeToUTC(value) {
+    const parts = String(value || '').split(':');
+    const hours = Number(parts[0]);
+    const minutes = Number(parts[1]);
+    const local = new Date();
+    local.setHours(Number.isFinite(hours) ? hours : 0, Number.isFinite(minutes) ? minutes : 0, 0, 0);
+    return { hour_utc: local.getUTCHours(), minute_utc: local.getUTCMinutes() };
   }
-  function oauthTestResults(run) {
-    return Array.isArray(run.results) ? run.results : [];
+  function oauthTestUTCToTime(hourUTC, minuteUTC) {
+    const local = new Date();
+    local.setUTCHours(Number.isFinite(hourUTC) ? hourUTC : 0, Number.isFinite(minuteUTC) ? minuteUTC : 0, 0, 0);
+    return String(local.getHours()).padStart(2, '0') + ':' + String(local.getMinutes()).padStart(2, '0');
   }
-  function oauthTestLatestAnswer(run) {
-    const results = oauthTestResults(run);
-    for (let i = results.length - 1; i >= 0; i -= 1) {
-      const result = results[i] || {};
-      if (result.status === 'succeeded' && (result.question1 || result.question2_html)) return result;
+  function oauthTestSettingsPayload() {
+    const time = oauthTestTimeToUTC($('oauthTestsTime').value);
+    return {
+      enabled: $('oauthTestsEnabled').checked,
+      hour_utc: time.hour_utc,
+      minute_utc: time.minute_utc,
+      model: $('oauthTestsModel').value.trim() || 'gpt-6-astra',
+      thinking_intensity: $('oauthTestsReasoning').value,
+    };
+  }
+  function applyOAuthTestSettings(settings) {
+    if (!settings) return;
+    $('oauthTestsEnabled').checked = !!settings.enabled;
+    $('oauthTestsTime').value = oauthTestUTCToTime(settings.hour_utc, settings.minute_utc);
+    $('oauthTestsModel').value = settings.model || 'gpt-6-astra';
+    $('oauthTestsReasoning').value = settings.thinking_intensity || 'high';
+    const time = $('oauthTestsTime').value;
+    const badge = $('oauthTestsBadge');
+    if (badge) badge.textContent = settings.enabled ? ('每日 ' + time) : '定时未启用';
+    const hint = $('oauthTestsScheduleHint');
+    if (hint) {
+      hint.textContent = settings.enabled
+        ? ('每天 ' + time + '（浏览器本地时间）自动测试全部账号；模型 ' + (settings.model || '') + '，思考强度 ' + (settings.thinking_intensity || '') + '。')
+        : '定时未启用：只有点「测试全部账号」或卡片上的「测试」才会发起调用。';
     }
-    for (let i = results.length - 1; i >= 0; i -= 1) {
-      const result = results[i] || {};
-      if (result.question1 || result.question2_html) return result;
+  }
+  function oauthTestStatusLabel(status) {
+    switch (status) {
+      case 'running': return '测试中';
+      case 'succeeded': return '成功';
+      case 'failed': return '失败';
+      default: return '未测试';
     }
-    return null;
   }
-  function renderOAuthTestAccounts(run) {
-    const results = oauthTestResults(run);
-    if (!results.length) return '<div class="hint">本轮还没有账号结果</div>';
-    const rows = results.map((result) => {
-      const name = result.display_name || result.auth_id || '未知账号';
-      const status = result.status || 'unknown';
-      const detail = result.error ? ' · ' + result.error : '';
-      const provider = result.provider ? ' · ' + result.provider : '';
-      return '<div class="oauth-tests-account"><span class="oauth-tests-account-name">' + esc(name) + provider + '</span><span class="oauth-tests-account-status ' + (status === 'failed' ? 'is-failed' : status === 'succeeded' ? 'is-ok' : '') + '">' + esc(status) + '</span><span class="oauth-tests-account-detail">' + esc(detail) + '</span></div>';
-    });
-    return '<div class="oauth-tests-accounts">' + rows.join('') + '</div>';
+  function oauthTestPreviewURL(account) {
+    const html = (account.result && account.result.question2_html) || '';
+    if (!html) return '';
+    const cache = state.oauthTestBlobs || (state.oauthTestBlobs = {});
+    const cached = cache[account.auth_id];
+    if (cached && cached.html === html) return cached.url;
+    if (cached) {
+      try { URL.revokeObjectURL(cached.url); } catch (err) { /* already gone */ }
+    }
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    cache[account.auth_id] = { html: html, url: url };
+    return url;
   }
-  function renderOAuthTestsLatest(data) {
-    const run = data && typeof data === 'object' ? data : {};
-    state.oauthTestsLatest = run;
-    const root = $('oauthTestsLatest');
+  // 测试耗时：从探针开始到两道题都返回。
+  function oauthTestDurationLabel(started, finished) {
+    if (!started || !finished) return '';
+    const ms = finished.getTime() - started.getTime();
+    if (!Number.isFinite(ms) || ms < 0) return '';
+    const seconds = Math.round(ms / 1000);
+    if (seconds < 60) return seconds + ' 秒';
+    const minutes = Math.floor(seconds / 60);
+    const rest = seconds % 60;
+    return minutes + ' 分 ' + rest + ' 秒';
+  }
+  function oauthTestMetaLabel(account, result, status) {
+    if (status === 'running') return '测试中…';
+    const started = result.started_at ? new Date(result.started_at) : null;
+    const finished = result.completed_at ? new Date(result.completed_at) : null;
+    const testedAt = finished || started;
+    if (!testedAt) return '尚无测试记录';
+    const parts = ['测试时间 ' + testedAt.toLocaleString()];
+    const duration = oauthTestDurationLabel(started, finished);
+    if (duration) parts.push('耗时 ' + duration);
+    if (result.model) parts.push(result.model);
+    return parts.join(' · ');
+  }
+  function oauthTestCardHTML(account) {
+    const result = account.result || {};
+    const status = account.running ? 'running' : (account.status || 'untested');
+    const question1 = result.question1 || (status === 'failed' ? (result.error || '') : '');
+    const previewURL = oauthTestPreviewURL(account);
+    const frame = previewURL
+      ? '<iframe class="oauth-tests-preview" sandbox="allow-scripts" src="' + esc(previewURL) + '"></iframe>'
+      : '<div class="hint">' + (status === 'failed' ? '本次没有返回结果' : '还没有题2结果') + '</div>';
+    const fileHint = result.question2_file
+      ? '<span class="hint oauth-test-card-file">HTML 已保存：' + esc(result.question2_file) + '</span>'
+      : '';
+    return '<div class="card oauth-test-card" data-auth-id="' + esc(account.auth_id) + '" data-status="' + esc(status) + '" data-completed="' + esc(result.completed_at || '') + '">'
+      + '<div class="oauth-test-card-head">'
+      + '<div class="oauth-test-card-title">'
+      + '<span class="oauth-test-card-name">' + esc(account.display_name || account.auth_id) + '</span>'
+      + '<span class="oauth-test-card-tags">'
+      + '<span class="oauth-test-card-tag">' + esc(account.provider || 'unknown') + '</span>'
+      + (account.auth_index ? '<span class="oauth-test-card-tag ghost">' + esc(account.auth_index) + '</span>' : '')
+      + '</span>'
+      + '<span class="oauth-test-card-status is-' + esc(status) + '">' + esc(oauthTestStatusLabel(status)) + '</span>'
+      + '</div>'
+      + '<div class="oauth-test-card-actions">'
+      + '<button class="btn sm" data-oauth-test-run="' + esc(account.auth_id) + '"' + (account.running ? ' disabled' : '') + '>测试</button>'
+      + (result.question2_html ? '<button class="btn ghost sm" data-oauth-test-download="' + esc(account.auth_id) + '">下载 HTML</button>' : '')
+      + '</div>'
+      + '</div>'
+      + '<div class="hint oauth-test-card-meta">' + esc(oauthTestMetaLabel(account, result, status)) + '</div>'
+      + (result.error ? '<div class="hint oauth-test-card-error">' + esc(result.error) + '</div>' : '')
+      + '<div class="oauth-tests-question"><h3>题1 · 纯文本</h3><div class="oauth-tests-answer">' + esc(question1 || '暂无内容') + '</div></div>'
+      + '<div class="oauth-tests-question"><h3>题2 · 预览</h3>' + frame + fileHint + '</div>'
+      + '</div>';
+  }
+  function oauthTestCardsByAuthID() {
+    return state.oauthTestAccounts || (state.oauthTestAccounts = {});
+  }
+  function renderOAuthTestCards(data) {
+    const root = $('oauthTestsCards');
     if (!root) return;
-    if (!run.status) { root.innerHTML = '<div class="empty-state">暂无结果</div>'; return; }
-    const answer = oauthTestLatestAnswer(run) || {};
-    const q1 = answer.question1 || '';
-    const q2 = answer.question2_html || '';
-    const frame = q2
-      ? '<iframe class="oauth-tests-preview" sandbox="" srcdoc="' + String(q2).replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '"></iframe>'
-      : '<div class="hint">暂无题2预览</div>';
-    const started = run.started_at ? new Date(run.started_at).toLocaleString() : '';
-    const headline = '<div class="oauth-tests-run"><span class="oauth-tests-run-status ' + (run.status === 'failed' ? 'is-failed' : run.status === 'running' ? 'is-running' : 'is-ok') + '">' + esc(run.status) + '</span><span class="oauth-tests-run-meta">' + esc(run.model || '') + ' · ' + esc(run.thinking_intensity || '') + ' · ' + esc(started) + '</span></div>'
-      + (run.error ? '<div class="hint oauth-tests-run-error">' + esc(run.error) + '</div>' : '');
-    const owner = answer.display_name ? '<div class="hint">最近一条成功结果来自：' + esc(answer.display_name) + '</div>' : '';
-    root.innerHTML = headline
-      + renderOAuthTestAccounts(run)
-      + owner
-      + '<div class="oauth-tests-question"><h3>题1 · 纯文本</h3><div class="oauth-tests-answer"></div></div>'
-      + '<div class="oauth-tests-question"><h3>题2 · iframe 预览</h3>' + frame + '</div>';
-    root.querySelector('.oauth-tests-answer').textContent = q1 || '暂无内容';
-    if (run.status === 'running') scheduleOAuthTestsRefresh();
+    const accounts = Array.isArray(data && data.accounts) ? data.accounts : [];
+    if (!accounts.length) {
+      root.innerHTML = '<div class="empty-state">没有可用的 OAuth 账号</div>';
+      state.oauthTestsRunning = [];
+      return;
+    }
+    const index = oauthTestCardsByAuthID();
+    Object.keys(index).forEach((authID) => { delete index[authID]; });
+    accounts.forEach((account) => { index[account.auth_id] = account; });
+    root.innerHTML = accounts.map(oauthTestCardHTML).join('');
+    state.oauthTestsRunning = accounts.filter((account) => account.running).map((account) => account.auth_id);
+    if (state.oauthTestsRunning.length) scheduleOAuthTestsRefresh();
+  }
+  function patchOAuthTestCards(accounts) {
+    const root = $('oauthTestsCards');
+    if (!root || !Array.isArray(accounts)) return;
+    const index = oauthTestCardsByAuthID();
+    accounts.forEach((account) => {
+      index[account.auth_id] = account;
+      const status = account.running ? 'running' : (account.status || 'untested');
+      const completed = (account.result && account.result.completed_at) || '';
+      // Only the cards that actually moved are rebuilt: rebuilding the rest would
+      // reload their previews and lose the operator's scroll position.
+      let card = null;
+      for (const child of root.children) {
+        if (child.dataset && child.dataset.authId === account.auth_id) { card = child; break; }
+      }
+      if (!card) return;
+      if (card.dataset.status === status && card.dataset.completed === completed) return;
+      const holder = document.createElement('div');
+      holder.innerHTML = oauthTestCardHTML(account);
+      card.replaceWith(holder.firstElementChild);
+    });
+    state.oauthTestsRunning = accounts.filter((account) => account.running).map((account) => account.auth_id);
+    if (state.oauthTestsRunning.length) scheduleOAuthTestsRefresh();
+  }
+  async function refreshRunningOAuthTestCards() {
+    const running = state.oauthTestsRunning || [];
+    if (!running.length) return;
+    const data = await api('GET', 'credit-manager/oauth-tests?auth_ids=' + encodeURIComponent(running.join(',')));
+    patchOAuthTestCards(data && data.accounts);
   }
   function scheduleOAuthTestsRefresh() {
     if (state.oauthTestsRefreshTimer) return;
@@ -1566,55 +1682,56 @@
       state.oauthTestsRefreshTimer = null;
       if ((state.currentTab || '') !== 'oauth-tests') return;
       try {
-        await loadOAuthTestsLatest();
+        await refreshRunningOAuthTestCards();
       } catch (err) {
-        // A failed poll must not break the tab; the manual refresh stays.
+        // A failed poll must not break the tab; the refresh button stays.
       }
     }, 5000);
   }
-  function oauthTestsSettingsPayload() {
-    return {
-      enabled: $('oauthTestsEnabled').checked,
-      interval_minutes: Number($('oauthTestsInterval').value) || 60,
-      model: $('oauthTestsModel').value.trim() || 'gpt-6-astra',
-      thinking_intensity: $('oauthTestsReasoning').value,
-      prompt: $('oauthTestsPrompt').value,
-    };
-  }
-  function applyOAuthTestsSettings(settings) {
-    if (!settings) return;
-    const intensity = settings.thinking_intensity || settings.reasoning_effort || settings.reasoning || 'high';
-    $('oauthTestsModel').value = settings.model || 'gpt-6-astra';
-    $('oauthTestsReasoning').value = intensity;
-    $('oauthTestsEnabled').checked = !!settings.enabled;
-    $('oauthTestsInterval').value = settings.interval_minutes || 60;
-    $('oauthTestsPrompt').value = settings.prompt || '';
-    const badge = $('oauthTestsBadge');
-    if (badge) badge.textContent = settings.enabled ? ('定时 ' + (settings.interval_minutes || 60) + ' 分钟') : '定时未启用';
-  }
-  async function loadOAuthTestsSettings() {
-    const data = await api('GET', 'credit-manager/oauth-tests/settings');
-    const settings = data && (data.settings || data);
-    applyOAuthTestsSettings(settings);
+  async function loadOAuthTestsState() {
+    const data = await api('GET', 'credit-manager/oauth-tests');
+    applyOAuthTestSettings(data && data.settings);
+    renderOAuthTestCards(data);
     $('oauthTestsStatus').textContent = '已加载';
     return data;
   }
   async function saveOAuthTestsSettings() {
-    const data = await api('POST', 'credit-manager/oauth-tests/settings', oauthTestsSettingsPayload());
-    applyOAuthTestsSettings(data && (data.settings || data));
+    const data = await api('POST', 'credit-manager/oauth-tests/settings', oauthTestSettingsPayload());
+    applyOAuthTestSettings(data);
     $('oauthTestsStatus').textContent = '已保存';
     flash('OAuth 测试设置已保存', true);
     return data;
   }
-  async function loadOAuthTestsLatest() { const data = await api('GET', 'credit-manager/oauth-tests/latest'); renderOAuthTestsLatest(data); return data; }
-  async function runOAuthTests() {
-    await saveOAuthTestsSettings();
-    const data = await api('POST', 'credit-manager/oauth-tests/run', {});
-    flash('OAuth 测试已启动', true);
-    renderOAuthTestsLatest(data);
-    scheduleOAuthTestsRefresh();
+  async function runOAuthTests(authID) {
+    await api('POST', 'credit-manager/oauth-tests/run', authID ? { auth_id: authID } : {});
+    flash(authID ? '已开始测试该账号' : '已开始测试全部账号', true);
+    if (authID) {
+      // Refresh just that card: the poller picks it up from here.
+      const data = await api('GET', 'credit-manager/oauth-tests?auth_ids=' + encodeURIComponent(authID));
+      patchOAuthTestCards(data && data.accounts);
+      if ((state.oauthTestsRunning || []).length) scheduleOAuthTestsRefresh();
+      return;
+    }
+    await loadOAuthTestsState();
   }
-  async function stopOAuthTests() { await api('POST', 'credit-manager/oauth-tests/stop', {}); flash('OAuth 测试已停止', true); await loadOAuthTestsLatest(); }
+  function downloadOAuthTestHTML(authID) {
+    const account = oauthTestCardsByAuthID()[authID];
+    const html = (account && account.result && account.result.question2_html) || '';
+    if (!html) { flash('该账号还没有可下载的 HTML', false); return; }
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = String(authID).replace(/[^a-zA-Z0-9._-]+/g, '-') + '.html';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  async function stopOAuthTests() {
+    await api('POST', 'credit-manager/oauth-tests/stop', {});
+    flash('已请求停止测试', true);
+    await refreshRunningOAuthTestCards();
+  }
   // Refresh only the data needed by the visible tab when switching.
   async function refreshActiveTab() {
     const tab = state.currentTab || 'overview';
@@ -1626,7 +1743,7 @@
       if (seq !== state.tabLoadSeq) return;
       return;
     }
-    if (tab === 'oauth-tests') { await loadOAuthTestsSettings(); await loadOAuthTestsLatest(); return; }
+    if (tab === 'oauth-tests') { await loadOAuthTestsState(); return; }
     if (tab === 'auth-quotas') {
       loadSessionAffinitySettings().catch(() => {});
       loadAuthFallbackSettings().catch(() => {});
@@ -6237,11 +6354,21 @@
   $('btnRefreshAuthQuotaPage').addEventListener('click', () => {
     refreshVisibleAuthQuotas().catch(e => flash(e.message, false));
   });
-  $('btnOAuthTestsLoad').addEventListener('click', () => loadOAuthTestsSettings().catch(e => flash(e.message, false)));
   $('btnOAuthTestsSave').addEventListener('click', () => saveOAuthTestsSettings().catch(e => flash(e.message, false)));
-  $('btnOAuthTestsRun').addEventListener('click', () => runOAuthTests().catch(e => flash(e.message, false)));
+  $('btnOAuthTestsRunAll').addEventListener('click', () => runOAuthTests().catch(e => flash(e.message, false)));
   $('btnOAuthTestsStop').addEventListener('click', () => stopOAuthTests().catch(e => flash(e.message, false)));
-  $('btnOAuthTestsRefresh').addEventListener('click', () => loadOAuthTestsLatest().catch(e => flash(e.message, false)));
+  $('btnOAuthTestsRefresh').addEventListener('click', () => loadOAuthTestsState().catch(e => flash(e.message, false)));
+  // One delegated listener: a card is rebuilt in place when its result moves.
+  $('oauthTestsCards').addEventListener('click', (event) => {
+    const download = event.target.closest('[data-oauth-test-download]');
+    if (download) {
+      downloadOAuthTestHTML(download.getAttribute('data-oauth-test-download'));
+      return;
+    }
+    const button = event.target.closest('[data-oauth-test-run]');
+    if (!button) return;
+    runOAuthTests(button.getAttribute('data-oauth-test-run')).catch(e => flash(e.message, false));
+  });
   $('btnAuthWarmupSettings').addEventListener('click', () => {
     openAuthWarmupSettings().catch(e => flash(e.message, false));
   });

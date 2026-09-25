@@ -575,21 +575,26 @@
   </section>
 
   <section id="tab-oauth-tests" class="tabpane hidden">
-    <div class="page-intro"><div><h2>OAuth 测试</h2><p>同时对所有可用 OAuth 账号问同样两道题（题1 纯文本、题2 生成 SVG 动画 HTML）。探针固定到被测账号、不参与兜底；账号失败或返回为空只记录在该账号名下，不会中断其他账号。账号并发已满时会等一会儿再问（15 秒一次，直到该题 10 分钟预算用完）。探针不计入用量账本，但会真实消耗该账号的上游额度。</p></div><span class="badge" id="oauthTestsBadge">未配置</span></div>
-    <div class="oauth-tests-grid">
-      <div class="card">
-        <div class="section-heading"><h2 class="panel-title">测试设置</h2><span class="muted" id="oauthTestsStatus">未加载</span></div>
-        <div class="form-grid-2 oauth-tests-form">
-          <label>模型<input id="oauthTestsModel" value="gpt-6-astra" autocomplete="off"/></label>
-          <label>思考强度<select id="oauthTestsReasoning"><option value="high" selected>high</option><option value="medium">medium</option><option value="low">low</option></select></label>
-          <label class="oauth-test-toggle"><input type="checkbox" id="oauthTestsEnabled"/> 启用定时测试</label>
-          <label>间隔（分钟）<input id="oauthTestsInterval" type="number" min="1" max="1440" value="60"/></label>
-          <label class="field-span-2">题1 自定义提示词<textarea id="oauthTestsPrompt" rows="3" placeholder="留空使用内置题目：你最后的训练数据，日本首相是谁?不允许搜索"></textarea></label>
+    <div class="page-intro"><div><h2>OAuth 测试</h2><p>每个可用 OAuth 账号一张卡片，问固定两道题（题1 纯文本、题2 生成 SVG 动画 HTML）。探针固定到被测账号、不参与兜底；账号失败或返回为空只记录在该账号名下，不影响其他账号。账号并发已满时会等一会儿再问（15 秒一次，直到该题 10 分钟预算用完）。探针不计入用量账本，但会真实消耗该账号的上游额度。</p></div><span class="badge" id="oauthTestsBadge">未配置</span></div>
+
+    <div class="card oauth-tests-toolbar">
+      <div class="section-heading"><h2 class="panel-title">每日定时</h2><span class="muted" id="oauthTestsStatus">未加载</span></div>
+      <div class="oauth-tests-toolbar-row">
+        <label class="oauth-test-toggle"><input type="checkbox" id="oauthTestsEnabled"/> 启用每日定时</label>
+        <label>运行时间<input id="oauthTestsTime" type="time" value="09:00" step="60"/><span class="hint oauth-tests-timezone">浏览器本地时间</span></label>
+        <label>模型<input id="oauthTestsModel" value="gpt-6-astra" autocomplete="off"/></label>
+        <label>思考强度<select id="oauthTestsReasoning"><option value="high" selected>high</option><option value="medium">medium</option><option value="low">low</option></select></label>
+        <div class="actions oauth-tests-toolbar-actions">
+          <button class="btn primary" id="btnOAuthTestsSave">保存设置</button>
+          <button class="btn" id="btnOAuthTestsRunAll">测试全部账号</button>
+          <button class="btn danger" id="btnOAuthTestsStop">停止测试</button>
+          <button class="btn ghost" id="btnOAuthTestsRefresh">刷新</button>
         </div>
-        <div class="actions"><button class="btn ghost" id="btnOAuthTestsLoad">加载设置</button><button class="btn primary" id="btnOAuthTestsSave">保存设置</button><button class="btn" id="btnOAuthTestsRun">运行测试</button><button class="btn danger" id="btnOAuthTestsStop">停止测试</button></div>
       </div>
-      <div class="card oauth-tests-results"><div class="section-heading"><h2 class="panel-title">最近结果</h2><button class="btn ghost sm" id="btnOAuthTestsRefresh">刷新</button></div><div id="oauthTestsLatest" class="oauth-tests-latest"><div class="empty-state">暂无结果</div></div></div>
+      <div class="hint" id="oauthTestsScheduleHint"></div>
     </div>
+
+    <div id="oauthTestsCards" class="oauth-tests-cards"><div class="empty-state">正在加载账号…</div></div>
   </section>
 
   <section id="tab-auth-quotas" class="tabpane hidden">
