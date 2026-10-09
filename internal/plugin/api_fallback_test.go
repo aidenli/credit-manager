@@ -51,7 +51,7 @@ func TestStreamFallsBackToAPIProviderOnOverload(t *testing.T) {
 			reads++
 			switch {
 			case len(attempts) == 1 && reads == 1:
-				result = pluginapi.HostModelStreamReadResponse{Payload: []byte(`data: {"type":"response.created"}`)}
+				result = pluginapi.HostModelStreamReadResponse{Payload: []byte(`data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress","output":[],"error":null}}`)}
 			case len(attempts) == 1:
 				result = pluginapi.HostModelStreamReadResponse{Error: `{"error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"Our servers are currently overloaded."}}`}
 			case reads%2 == 1:
@@ -100,6 +100,38 @@ func TestStreamFallsBackToAPIProviderOnOverload(t *testing.T) {
 	}
 	if len(emitted) == 0 {
 		t.Fatal("nothing emitted")
+	}
+}
+
+// The real codex response.created envelope embeds "error":null and an empty
+// "output":[]; a substring test for "error" misreads it as content and emits it,
+// defeating the retry. isStreamPreamble must classify by event type instead.
+func TestStreamPreambleClassification(t *testing.T) {
+	preamble := [][]byte{
+		[]byte(`data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress","output":[],"error":null}}`),
+		[]byte(`data: {"type":"response.in_progress","response":{"id":"resp_1","error":null}}`),
+		[]byte(`data: {"type":"response.output_item.added","item":{"id":"rs","type":"reasoning","summary":[]},"output_index":0}`),
+		[]byte(`data: {"type":"response.reasoning_summary_part.added","part":{"type":"summary_text","text":""}}`),
+		[]byte(":keepalive"),
+		[]byte(""),
+		[]byte("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"error\":null,\"output\":[]}}"),
+	}
+	for _, p := range preamble {
+		if !isStreamPreamble(p) {
+			t.Errorf("expected preamble, got content: %s", p)
+		}
+	}
+	content := [][]byte{
+		[]byte(`data: {"type":"response.output_text.delta","delta":"hi"}`),
+		[]byte(`data: {"type":"response.completed","response":{"status":"completed"}}`),
+		[]byte(`data: {"type":"response.failed","response":{"error":{"code":"thinking_signature_invalid"}}}`),
+		[]byte(`data: {"type":"response.output_item.added","item":{"id":"rs","type":"reasoning","encrypted_content":"gAAAA","summary":[]}}`),
+		[]byte(`data: {"type":"response.output_item.done","item":{"id":"m","type":"message","content":[{"type":"output_text","text":"x"}]}}`),
+	}
+	for _, p := range content {
+		if isStreamPreamble(p) {
+			t.Errorf("expected content, got preamble: %s", p)
+		}
 	}
 }
 

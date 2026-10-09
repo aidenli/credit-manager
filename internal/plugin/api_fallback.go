@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -129,14 +130,116 @@ func isFallbackWorthyFailure(text string) bool {
 	return false
 }
 
-// isStreamPreamble reports whether a Responses stream chunk only announces the
-// response. Such chunks are held back until real output arrives, so a failure
-// right after them can still be retried without the client noticing.
+// isStreamPreamble reports whether a Responses stream chunk only carries
+// handshake events that announce the response without producing any content.
+// Such chunks are held back until real output arrives, so a failure right after
+// them (the codex overload / encrypted-reasoning rejection shape, which the host
+// flushes the buffered handshake frames before) can still be retried or fallen
+// back without the client noticing.
+//
+// A chunk may bundle several SSE "data:" lines, so it is preamble only when every
+// event line it carries is a handshake event. The classification mirrors the
+// host's own isCodexBootstrapBufferableEvent: it keys off the event type rather
+// than scanning for substrings, because the response.created envelope legitimately
+// embeds "error":null and an empty "output":[] that a substring test misreads as
+// real content.
 func isStreamPreamble(payload []byte) bool {
-	text := string(payload)
-	if strings.Contains(text, "response.output") || strings.Contains(text, "response.completed") ||
-		strings.Contains(text, "response.failed") || strings.Contains(text, "error") {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 {
+		return true
+	}
+	sawEvent := false
+	for _, raw := range bytes.Split(trimmed, []byte("\n")) {
+		line := bytes.TrimSpace(raw)
+		if len(line) == 0 {
+			continue
+		}
+		if bytes.HasPrefix(line, []byte("event:")) || bytes.HasPrefix(line, []byte("id:")) ||
+			bytes.HasPrefix(line, []byte("retry:")) || bytes.HasPrefix(line, []byte(":")) {
+			// SSE comments and framing lines carry no event, so a chunk made only
+			// of them is still safe to hold back.
+			sawEvent = true
+			continue
+		}
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			return false
+		}
+		data := bytes.TrimSpace(line[len("data:"):])
+		if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
+			continue
+		}
+		sawEvent = true
+		if !isPreambleEvent(data) {
+			return false
+		}
+	}
+	return sawEvent
+}
+
+// preambleEventTypes are the Responses handshake events that announce the stream
+// without emitting content, mirroring the host's bootstrap buffer allow-list.
+var preambleEventTypes = map[string]struct{}{
+	"response.created":        {},
+	"response.in_progress":    {},
+	"response.queued":         {},
+	"codex.rate_limits":       {},
+	"codex.response.metadata": {},
+	"keepalive":               {},
+}
+
+// isPreambleEvent reports whether one decoded SSE data event is a content-free
+// handshake frame. An *.added announcement is preamble only while the item or
+// part it announces is still empty; a reasoning item that already carries
+// encrypted_content is real state and is not held.
+func isPreambleEvent(data []byte) bool {
+	var event struct {
+		Type string `json:"type"`
+		Item struct {
+			Type             string          `json:"type"`
+			EncryptedContent string          `json:"encrypted_content"`
+			Content          json.RawMessage `json:"content"`
+			Summary          json.RawMessage `json:"summary"`
+			Arguments        string          `json:"arguments"`
+		} `json:"item"`
+		Part struct {
+			Text string `json:"text"`
+		} `json:"part"`
+	}
+	if err := json.Unmarshal(data, &event); err != nil {
 		return false
 	}
-	return strings.Contains(text, "response.created") || strings.Contains(text, "response.in_progress")
+	if _, ok := preambleEventTypes[event.Type]; ok {
+		return true
+	}
+	switch event.Type {
+	case "response.output_item.added":
+		if event.Item.EncryptedContent != "" {
+			return false
+		}
+		switch event.Item.Type {
+		case "message", "reasoning":
+			return isEmptyRawList(event.Item.Content) && isEmptyRawList(event.Item.Summary)
+		case "function_call":
+			return event.Item.Arguments == ""
+		default:
+			return false
+		}
+	case "response.content_part.added", "response.reasoning_summary_part.added":
+		return strings.TrimSpace(event.Part.Text) == ""
+	}
+	return false
+}
+
+// isEmptyRawList reports whether a raw JSON value is absent, null, or an empty
+// array, which is how an announced-but-empty content or summary field appears.
+func isEmptyRawList(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return true
+	}
+	var list []json.RawMessage
+	if err := json.Unmarshal(trimmed, &list); err != nil {
+		return false
+	}
+	return len(list) == 0
 }
