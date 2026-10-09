@@ -46,3 +46,13 @@ stream:
 session_affinity:
   enabled: false
   ttl: 1h
+
+# API 供应商执行期兜底：OAuth 账号这次请求失败（429、408、5xx、限流、流内 overload /
+# usage_limit / 加密推理校验失败等），且还没有向客户端输出正文时，插件用同一请求改发到这里。
+# 是否启用仍由控制台的兜底开关（auth-quotas/fallback）决定；provider 或 model 留空即关闭。
+# model 会替换客户端请求的模型名，因此任意 gpt 模型都能兜底，不依赖宿主别名表。
+# 注意：宿主 openai-compatibility 里必须能以这个名字路由到该供应商，例如在 deepseek 的
+# models 下加一条不带 alias 的 `- name: deepseek-flash`。
+api_fallback:
+  provider: openai-compatible-deepseek
+  model: deepseek-flash

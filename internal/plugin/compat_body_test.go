@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -101,60 +102,34 @@ func TestSanitizeCompatRequestBodyRejectsNonObject(t *testing.T) {
 	}
 }
 
-// DeepSeek's thinking mode rejects a replayed history in which a tool call is not
-// followed by assistant messages carrying reasoning_content. A Codex-produced
-// conversation has no such field, so the plugin must supply the same placeholder
-// the host translator uses for reasoning it cannot read.
-func TestSanitizeCompatRequestBodyRepairsReasoning(t *testing.T) {
+// A Responses body must reach its provider byte for byte. The plugin's own
+// provider for that shape is Codex, whose upstream validates every `input[]`
+// item and rejects an injected field outright:
+//
+//	Unknown parameter: 'input[194].reasoning_content'. (code unknown_parameter)
+//
+// A Responses conversation already carries `reasoning` items, which the host
+// translator turns into the provider's own reasoning field, so the placeholder is
+// never needed here - only on the Chat Completions history a Codex conversation
+// is replayed as.
+func TestSanitizeCompatRequestBodyLeavesResponsesReasoningAlone(t *testing.T) {
 	body := `{"model":"m","input":[
 		{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},
 		{"type":"reasoning","id":"r1","summary":[{"type":"summary_text","text":"planned"}]},
 		{"type":"custom_tool_call","call_id":"c1","name":"exec","input":"1"},
 		{"type":"custom_tool_call_output","call_id":"c1","output":"ok"},
 		{"type":"custom_tool_call","call_id":"c2","name":"exec","input":"2"},
-		{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]},
-		{"type":"reasoning","id":"r2","summary":[]},
-		{"type":"custom_tool_call","call_id":"c3","name":"exec","input":"3"}
+		{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}
 	]}`
 	rewritten, stripped := sanitizeCompatRequestBody([]byte(body))
-	if len(stripped) != 1 || stripped[0] != "2x reasoning_content:injected" {
-		t.Fatalf("stripped = %#v", stripped)
+	if string(rewritten) != body {
+		t.Fatalf("a Responses body was rewritten: %s", rewritten)
 	}
-	var payload struct {
-		Input []map[string]any `json:"input"`
+	if len(stripped) != 0 {
+		t.Fatalf("stripped = %#v, want no rewrite", stripped)
 	}
-	if err := json.Unmarshal(rewritten, &payload); err != nil {
-		t.Fatalf("decode rewritten body: %v", err)
-	}
-	got := make([]string, 0, len(payload.Input))
-	for _, item := range payload.Input {
-		kind, _ := item["type"].(string)
-		if kind != "custom_tool_call" && kind != "message" {
-			continue
-		}
-		if role, _ := item["role"].(string); role != "" && role != "assistant" {
-			continue
-		}
-		reasoning, _ := item["reasoning_content"].(string)
-		got = append(got, kind+":"+reasoning)
-	}
-	want := []string{
-		// Covered by the reasoning item above it.
-		"custom_tool_call:",
-		// No reasoning item of its own: repaired.
-		"custom_tool_call:[reasoning unavailable]",
-		"message:[reasoning unavailable]",
-		// A reasoning item without visible text still counts as the provider's
-		// own placeholder, so nothing to inject.
-		"custom_tool_call:",
-	}
-	if len(got) != len(want) {
-		t.Fatalf("assistant items = %#v, want %#v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("assistant items = %#v, want %#v", got, want)
-		}
+	if strings.Contains(string(rewritten), "reasoning_content") {
+		t.Fatalf("a Responses body gained reasoning_content: %s", rewritten)
 	}
 }
 

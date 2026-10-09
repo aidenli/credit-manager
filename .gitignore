@@ -35,3 +35,7 @@ data/
 
 # Local AI assistant session state.
 .workbuddy-ai/
+
+# Plaintext key material exports (never commit).
+outputs/gd-keys*.json
+outputs/gd-keys*.xlsx

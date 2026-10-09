@@ -94,6 +94,18 @@ type SessionAffinityConfig struct {
 	TTL     time.Duration `yaml:"ttl" json:"ttl"`
 }
 
+// APIFallbackConfig names the API provider a failed OAuth attempt is replayed
+// on. The runtime switch (console: auth-quotas/fallback) still decides whether
+// the fallback runs at all; this only says where it goes. Leaving either field
+// empty disables the execution-time fallback.
+type APIFallbackConfig struct {
+	// Provider is the host provider key, "openai-compatible-<name>".
+	Provider string `yaml:"provider" json:"provider"`
+	// Model is sent to that provider whatever model the client asked for, so
+	// every model can fall back, not only the ones the provider aliases.
+	Model string `yaml:"model" json:"model"`
+}
+
 // Config is the plugin YAML configuration loaded by the host and/or config_file.
 type Config struct {
 	// ConfigFile optionally points to an external YAML file. Host config can be
@@ -111,6 +123,7 @@ type Config struct {
 	Settlement      SettlementConfig      `yaml:"settlement" json:"settlement"`
 	Stream          StreamConfig          `yaml:"stream" json:"stream"`
 	SessionAffinity SessionAffinityConfig `yaml:"session_affinity" json:"session_affinity"`
+	APIFallback     APIFallbackConfig     `yaml:"api_fallback" json:"api_fallback"`
 }
 
 func Default() Config {
@@ -143,6 +156,10 @@ func Default() Config {
 		SessionAffinity: SessionAffinityConfig{
 			Enabled: false,
 			TTL:     time.Hour,
+		},
+		APIFallback: APIFallbackConfig{
+			Provider: "openai-compatible-deepseek",
+			Model:    "deepseek-flash",
 		},
 	}
 }

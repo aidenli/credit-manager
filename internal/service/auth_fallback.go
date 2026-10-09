@@ -150,6 +150,20 @@ type authFallbackState struct {
 	enabled bool
 }
 
+// authFallbackReasonUpstreamError means a bound OAuth attempt already ran and
+// failed (429, 5xx, rate limit, in-stream overload), so the executor replayed it
+// on the API provider.
+const authFallbackReasonUpstreamError = "upstream_error"
+
+// AuthFallbackOn reports whether the operator opted into the API fallback.
+func (s *Service) AuthFallbackOn() bool { return s.authFallbackEnabled() }
+
+// RecordUpstreamFallback audits one execution-time fallback, the same way the
+// scheduler-time ones are counted.
+func (s *Service) RecordUpstreamFallback(ctx context.Context, key store.PluginKey, provider, model string) {
+	s.recordAuthFallbackHit(ctx, key, AuthPickCandidate{ID: provider, Provider: provider}, model, authFallbackReasonUpstreamError)
+}
+
 // authFallbackEnabled reports whether the operator opted into the fallback.
 func (s *Service) authFallbackEnabled() bool {
 	return s.authFallbackSettings().Enabled

@@ -61,12 +61,26 @@ func hostLogCompatFallback(callbackID, model, provider string, stripped []string
 	}, callbackID)
 }
 
-// errorText bounds an error message so one log line stays readable.
+// errorText bounds an error message so one log line stays readable, and keeps it
+// on one line: the host renders plugin log messages line by line, so an embedded
+// newline used to end the record early and hide the upstream error an operator
+// needs to see.
 func errorText(err error) string {
 	if err == nil {
 		return ""
 	}
-	return truncateText(err.Error(), maxHostLogErrorBytes)
+	return truncateText(singleLine(err.Error()), maxHostLogErrorBytes)
+}
+
+// singleLine collapses whitespace runs that would break a log record into
+// visible escapes.
+func singleLine(text string) string {
+	if !strings.ContainsAny(text, "\r\n") {
+		return text
+	}
+	text = strings.ReplaceAll(text, "\r\n", `\n`)
+	text = strings.ReplaceAll(text, "\n", `\n`)
+	return strings.ReplaceAll(text, "\r", `\r`)
 }
 
 func truncateText(text string, limit int) string {
@@ -77,4 +91,4 @@ func truncateText(text string, limit int) string {
 	return strings.TrimSpace(text[:limit]) + "...(truncated)"
 }
 
-const maxHostLogErrorBytes = 600
+const maxHostLogErrorBytes = 2000

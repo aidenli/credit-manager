@@ -27,6 +27,8 @@ import (
 //     trace the plugin side has.
 func TestFallbackAttemptRewritesBodyAndPinsProvider(t *testing.T) {
 	ctx := context.Background()
+	resetCompatAPITargets()
+	t.Cleanup(resetCompatAPITargets)
 	svc := newLifecycleTestService(t)
 	key := mintFallbackTestKey(t, ctx, svc)
 
@@ -89,19 +91,18 @@ func TestFallbackAttemptRewritesBodyAndPinsProvider(t *testing.T) {
 	if format == nil || format["type"] != "json_object" {
 		t.Fatalf("structured output was not downgraded for the API provider: %s", hostExecution.Body)
 	}
-	// The second tool call had no reasoning item of its own, so the provider's
-	// thinking-mode contract needs the field supplied.
+	// A Responses body is never repaired: the per-item field is rejected by the
+	// provider this plugin's own accounts use, so the nested body must go out
+	// unchanged.
 	items, _ := sent["input"].([]any)
 	if len(items) != 4 {
 		t.Fatalf("nested input items = %#v", sent["input"])
 	}
-	first, _ := items[1].(map[string]any)
-	second, _ := items[3].(map[string]any)
-	if reasoning, _ := first["reasoning_content"].(string); reasoning != "" {
-		t.Fatalf("covered tool call gained a placeholder: %#v", first)
-	}
-	if reasoning, _ := second["reasoning_content"].(string); reasoning != compatReasoningPlaceholder {
-		t.Fatalf("uncovered tool call reasoning = %#v", second)
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		if reasoning, ok := item["reasoning_content"]; ok {
+			t.Fatalf("Responses item gained reasoning_content: %#v", reasoning)
+		}
 	}
 	if len(logs) < 2 {
 		t.Fatalf("host log lines = %#v, want a rewrite and a failure line", logs)
@@ -109,8 +110,8 @@ func TestFallbackAttemptRewritesBodyAndPinsProvider(t *testing.T) {
 	if !strings.Contains(strings.Join(logs, "\n"), "text.format:json_schema->json_object") {
 		t.Fatalf("rewrite was not logged: %#v", logs)
 	}
-	if !strings.Contains(strings.Join(logs, "\n"), "1x reasoning_content:injected") {
-		t.Fatalf("reasoning repair was not logged: %#v", logs)
+	if strings.Contains(strings.Join(logs, "\n"), "reasoning_content:injected") {
+		t.Fatalf("a Responses body reported a reasoning repair: %#v", logs)
 	}
 	if !strings.Contains(strings.Join(logs, "\n"), "response_format type is unavailable") {
 		t.Fatalf("failure text was not logged: %#v", logs)
@@ -130,6 +131,10 @@ func TestFallbackAttemptRewritesBodyAndPinsProvider(t *testing.T) {
 // unchanged, and the nested execution must stay on that provider.
 func TestBoundAccountAttemptKeepsStructuredOutputAndPinsCodex(t *testing.T) {
 	ctx := context.Background()
+	// This case covers a Codex-only window: no scheduling window offered an API
+	// provider, so the bound account must receive the body unchanged.
+	resetCompatAPITargets()
+	t.Cleanup(resetCompatAPITargets)
 	svc := newLifecycleTestService(t)
 	key := mintFallbackTestKey(t, ctx, svc)
 

@@ -27,6 +27,13 @@ func pickAuth(raw []byte) ([]byte, error) {
 		}
 		candidates = append(candidates, service.AuthPickCandidate{ID: id, Provider: candidate.Provider, Status: candidate.Status})
 	}
+	// Remember whether this model's window offers an OpenAI-compatible API
+	// provider: the host may dispatch the attempt there even when the plugin
+	// selected one of the key's own accounts, and the body has to be prepared for
+	// that provider in either case.
+	if pickCandidatesServeAPI(req.Providers, candidates) {
+		recordCompatAPITarget(req.Model)
+	}
 	if authID, handled, err := warmupTarget(req.Options.Headers, candidates); handled {
 		if err != nil {
 			return errorEnvelope("warmup_rejected", err.Error()), nil
