@@ -1,0 +1,2 @@
+# Host management secret for rebind.sh — never commit.
+.cpa_secret

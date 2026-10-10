@@ -85,6 +85,19 @@ func execute(raw []byte) ([]byte, error) {
 	startedAt := time.Now()
 	body = prepareCompatBody(req, body)
 	hostBody, headers, status, errHost := hostModelExecute(req.HostCallbackID, req.ExecutorRequest, body, false)
+	fallback := newAPIFallback(svc, key)
+	if errHost != nil && !isAuthConcurrencyError(errHost) {
+		hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "host_execute", errHost)
+		if fallback.take(ctx, &req, &body, errHost.Error()) {
+			hostBody, headers, status, errHost = hostModelExecute(req.HostCallbackID, req.ExecutorRequest, body, false)
+		}
+	} else if errHost == nil && isFallbackWorthyStatus(status) {
+		hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "upstream_status",
+			fmt.Errorf("upstream status %d: %s", status, truncateText(string(hostBody), 300)))
+		if fallback.take(ctx, &req, &body, fmt.Sprintf("upstream status %d", status)) {
+			hostBody, headers, status, errHost = hostModelExecute(req.HostCallbackID, req.ExecutorRequest, body, false)
+		}
+	}
 	completedAt := time.Now()
 	metrics := usageMetricsFromRequest(body, startedAt, completedAt, resultFromStatus(status))
 	if errHost != nil {
@@ -191,10 +204,16 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 	startedAt := time.Now()
 	body = requestBodyWithStreamUsage(body, req.SourceFormat, req.Format)
 	body = prepareCompatBody(req, body)
-	for attempt := 0; ; attempt++ {
+	fallback := newAPIFallback(svc, key)
+	stripped := false
+	// Bounded: the strip retry and the API fallback each fire at most once.
+	for {
 		stream, err := openUpstreamStream(req, body)
 		if err != nil {
 			hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "host_execute_stream", err)
+			if fallback.take(ctx, &req, &body, err.Error()) {
+				continue
+			}
 			_ = svc.Release(ctx, reservation.ID, releaseReason("upstream_stream_error", err))
 			return err
 		}
@@ -203,6 +222,10 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 			hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "upstream_stream_status",
 				fmt.Errorf("upstream stream status %d", stream.StatusCode))
 			_ = closeHostModelStream(stream.StreamID)
+			if isFallbackWorthyStatus(stream.StatusCode) &&
+				fallback.take(ctx, &req, &body, fmt.Sprintf("upstream stream status %d", stream.StatusCode)) {
+				continue
+			}
 			parsed := usageparse.Result{}
 			if settleErr := svc.SettleFromUsage(ctx, reservation, plan, parsed, req.SourceFormat,
 				usageMetricsFromStream(body, startedAt, time.Time{}, initialCompletedAt, "failed")); settleErr != nil {
@@ -217,24 +240,33 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 		verdict, terminalErr := pumpUpstreamStream(ctx, svc, req, body, stream, pluginStreamID, reservation, plan, startedAt)
 		_ = closeHostModelStream(stream.StreamID)
 		switch {
-		case verdict == upstreamVerdictRetryStrip:
-			// Nothing was emitted downstream (the pump only returns this verdict
-			// while no chunk has been forwarded), so the same request can be retried
-			// on the same credential with the account-bound reasoning removed.
-			hostLog("warn", "credit-manager retrying without encrypted reasoning: model="+req.Model,
-				map[string]any{"model": req.Model, "provider": req.AuthProvider}, req.HostCallbackID)
-			markCompatPoisonedReasoning(compatRequestKey(req.Headers), req.Model)
-			var count int
-			body, count = stripCompatEncryptedReasoning(body)
-			if count == 0 || attempt >= 1 {
-				hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "upstream_stream_terminal",
-					errors.New(stripRetryFailedText))
-				_ = svc.Release(ctx, reservation.ID, releaseReason("upstream_stream_error", errors.New(stripRetryFailedText)))
-				return errors.New(stripRetryFailedText)
+		case verdict == upstreamVerdictRetryable:
+			// Nothing reached the client (the pump only returns this verdict while
+			// no output has been forwarded), so the request can be replayed.
+			failure := terminalErr.Error()
+			if isEncryptedReasoningFailure(failure) && !stripped {
+				// First choice for an account-bound reasoning rejection: the same
+				// credential, without the state only another account can decrypt.
+				stripped = true
+				hostLog("warn", "credit-manager retrying without encrypted reasoning: model="+req.Model,
+					map[string]any{"model": req.Model, "provider": req.AuthProvider}, req.HostCallbackID)
+				markCompatPoisonedReasoning(compatRequestKey(req.Headers), req.Model)
+				var count int
+				body, count = stripCompatEncryptedReasoning(body)
+				if count > 0 {
+					hostLogCompatFallback(req.HostCallbackID, req.Model, req.AuthProvider,
+						[]string{strconv.Itoa(count) + "x encrypted_reasoning:stripped"})
+					continue
+				}
 			}
-			hostLogCompatFallback(req.HostCallbackID, req.Model, req.AuthProvider,
-				[]string{strconv.Itoa(count) + "x encrypted_reasoning:stripped"})
-			continue
+			if fallback.take(ctx, &req, &body, failure) {
+				continue
+			}
+			if isEncryptedReasoningFailure(failure) {
+				terminalErr = errors.New(stripRetryFailedText)
+			}
+			_ = svc.Release(ctx, reservation.ID, releaseReason("upstream_stream_error", terminalErr))
+			return terminalErr
 		case verdict == upstreamVerdictSettled:
 			return nil
 		default:
@@ -248,7 +280,9 @@ type upstreamVerdict int
 
 const (
 	upstreamVerdictSettled upstreamVerdict = iota
-	upstreamVerdictRetryStrip
+	// upstreamVerdictRetryable: the attempt failed before any output reached the
+	// client and the reservation is still open, so the caller may replay it.
+	upstreamVerdictRetryable
 	upstreamVerdictFailed
 )
 
@@ -289,9 +323,10 @@ func openUpstreamStream(req rpcExecutorRequest, body []byte) (pluginapi.HostMode
 // pumpUpstreamStream reads the upstream stream to its end, forwarding every chunk
 // downstream and settling the reservation the way the attempt ended.
 //
-// It reports upstreamVerdictRetryStrip only while no chunk has been forwarded: an
-// account-bound reasoning failure that arrives before the client has seen
-// anything can be retried invisibly, one that arrives after cannot.
+// It reports upstreamVerdictRetryable (without settling) only while no output
+// has been forwarded: a failure that arrives before the client has seen anything
+// can be retried invisibly, one that arrives after cannot. Preamble events are
+// held back so they do not count as output.
 func pumpUpstreamStream(
 	ctx context.Context,
 	svc *service.Service,
@@ -309,6 +344,7 @@ func pumpUpstreamStream(
 	maxBuffer := svc.Config().Stream.MaxBufferBytes
 	terminal := newStreamTerminalDetector(body)
 	emitted := false
+	var held [][]byte
 	for {
 		chunkRaw, errRead := callHost(pluginabi.MethodHostModelStreamRead, pluginapi.HostModelStreamReadRequest{StreamID: stream.StreamID})
 		if errRead != nil {
@@ -337,8 +373,10 @@ func pumpUpstreamStream(
 			// layer that sees it: the in-stream terminal failure of an attempt the
 			// host already retried. Log it before settling.
 			hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "upstream_stream_terminal", errors.New(chunk.Error))
-			if !emitted && isEncryptedReasoningFailure(chunk.Error) {
-				return upstreamVerdictRetryStrip, errors.New(chunk.Error)
+			if !emitted {
+				// Only preamble events (if any) were seen and they were held back,
+				// so the caller can replay the request invisibly.
+				return upstreamVerdictRetryable, errors.New(chunk.Error)
 			}
 			parsed := parseExecutorStreamUsage(buffer.Bytes(), req)
 			if settleErr := svc.SettleFromUsage(ctx, reservation, plan, parsed, firstNonEmpty(req.SourceFormat, req.Format),
@@ -360,7 +398,22 @@ func pumpUpstreamStream(
 			if firstChunkAt.IsZero() {
 				firstChunkAt = time.Now()
 			}
-			if err := emitPluginStreamChunk(pluginStreamID, bytes.Clone(chunk.Payload)); err != nil {
+			// Hold announcement events back while nothing else was sent: a failure
+			// right after them (the codex overload / signature rejection shape)
+			// then stays retryable.
+			if !emitted && !chunk.Done && isStreamPreamble(chunk.Payload) {
+				held = append(held, bytes.Clone(chunk.Payload))
+				continue
+			}
+			pending := append(held, bytes.Clone(chunk.Payload))
+			held = nil
+			var err error
+			for _, payload := range pending {
+				if err = emitPluginStreamChunk(pluginStreamID, payload); err != nil {
+					break
+				}
+			}
+			if err != nil {
 				completedAt = time.Now()
 				parsed := parseExecutorStreamUsage(buffer.Bytes(), req)
 				if settleErr := svc.SettleFromUsage(ctx, reservation, plan, parsed, firstNonEmpty(req.SourceFormat, req.Format),
@@ -374,6 +427,9 @@ func pumpUpstreamStream(
 		if chunk.Done {
 			break
 		}
+	}
+	for _, payload := range held {
+		_ = emitPluginStreamChunk(pluginStreamID, payload)
 	}
 	completedAt = time.Now()
 	parsed := parseExecutorStreamUsage(buffer.Bytes(), req)
@@ -517,12 +573,12 @@ func prepareCompatBody(req rpcExecutorRequest, body []byte) []byte {
 	targetsAPI := compatTargetsAPIProvider(req.ExecutorRequest)
 	// Account-bound reasoning state is stripped before the request is ever sent
 	// whenever this attempt can reach an OpenAI-compatible API provider, or when
-	// this credential and model already failed hydration once. Relying on the
-	// post-send retry is not enough: the upstream encrypted-content rejection
-	// (code thinking_signature_invalid, including the "Encrypted function output
-	// content" and per-item "encrypted content ... could not be verified"
-	// variants) usually arrives after early stream events have already been
-	// forwarded, so emitted is true and the strip retry window is closed. A
+	// this credential and model already failed hydration once. The post-send
+	// retry and preamble hold-back are not sufficient on their own: the upstream
+	// encrypted-content rejection (code thinking_signature_invalid, including the
+	// "Encrypted function output content" and per-item "encrypted content ...
+	// could not be verified" variants) can arrive after real output has already
+	// been forwarded, when emitted is true and the retry window is closed. A
 	// provider that cannot decrypt the account-bound state must never be handed
 	// it in the first place.
 	if targetsAPI || compatReasoningPoisoned(compatRequestKey(req.Headers), req.Model) {

@@ -36,7 +36,6 @@ data/
 # Local AI assistant session state.
 .workbuddy-ai/
 
-# Local management secret and ad-hoc ops scripts (never commit).
-scripts/.cpa_secret
-scripts/bind-all-keys-to-oauth.sh
-scripts/rebind.sh
+# Plaintext key material exports (never commit).
+outputs/gd-keys*.json
+outputs/gd-keys*.xlsx
