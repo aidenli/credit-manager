@@ -1,7 +1,10 @@
 package plugin
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -145,56 +148,139 @@ func hasReasoningContent(item map[string]any) bool {
 	return strings.TrimSpace(stringField(item, "reasoning_content")) != ""
 }
 
-// repairCompatReasoning makes an API-provider request satisfy the thinking-mode
-// contract: every assistant-side item that has no reasoning of its own and no
-// preceding reasoning item receives the placeholder the host translator itself
-// uses. Returns how many items were repaired.
-func repairCompatReasoning(payload map[string]any) int {
+// stripCompatEncryptedReasoning removes the account-bound reasoning state from a
+// replayed history so another credential can serve it.
+//
+// `encrypted_content` is opaque and bound to the upstream identity that produced
+// it: replayed through a different account it fails hydration with
+//
+//	The encrypted content for item amsg_… could not be verified.
+//	Reason: encrypted content hydration failed. (code thinking_signature_invalid)
+//
+// and the client keeps replaying the same items, so the conversation cannot
+// recover. The item `id` goes with the blob because an id minted by another
+// account has no match upstream either. Readable `summary` text and any plain
+// reasoning text stay, so the model still sees what it reasoned - it just cannot
+// hydrate the exact chain.
+//
+// The same account-bound encryption also rides on tool-result items
+// (`function_call_output` / `custom_tool_call_output`), which fail with
+//
+//	Encrypted function output content could not be decrypted or decoded.
+//	(code thinking_signature_invalid)
+//
+// so their encrypted state is stripped too. The pairing key for a tool-result
+// item is `call_id` (kept), and the readable `output` text stays, so the
+// conversation structure and the tool result the model saw are preserved.
+func stripCompatEncryptedReasoning(body []byte) ([]byte, int) {
+	if len(body) == 0 {
+		return body, 0
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
+		return body, 0
+	}
+	stripped := 0
 	if input, ok := payload["input"].([]any); ok {
-		return repairResponsesReasoning(input)
+		stripped += stripEncryptedReasoningEntries(input)
 	}
 	if messages, ok := payload["messages"].([]any); ok {
-		return repairChatReasoning(messages)
+		stripped += stripEncryptedReasoningEntries(messages)
 	}
-	return 0
+	if nested, ok := payload["reasoning"].(map[string]any); ok {
+		if _, ok := nested["encrypted_content"]; ok {
+			delete(nested, "encrypted_content")
+			stripped++
+		}
+	}
+	if stripped == 0 {
+		return body, 0
+	}
+	rewritten, err := json.Marshal(payload)
+	if err != nil {
+		return body, 0
+	}
+	return rewritten, stripped
 }
 
-// repairResponsesReasoning walks a Responses payload's input items. Any
-// `reasoning` item supplies the reasoning for the assistant-side items that
-// follow it, mirroring how the host translator attaches it.
-func repairResponsesReasoning(items []any) int {
-	pending := false
-	repaired := 0
+// stripEncryptedReasoningEntries strips account-bound reasoning state from a
+// list of Responses items or Chat Completions messages.
+func stripEncryptedReasoningEntries(items []any) int {
+	stripped := 0
 	for _, raw := range items {
 		item, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
-		kind := strings.ToLower(strings.TrimSpace(stringField(item, "type")))
-		if kind == "" && stringField(item, "role") != "" {
-			kind = "message"
+		if _, ok := item["encrypted_content"]; ok {
+			delete(item, "encrypted_content")
+			delete(item, "id")
+			stripped++
 		}
-		switch kind {
-		case "reasoning":
-			pending = true
-		case "message":
-			if !strings.EqualFold(strings.TrimSpace(stringField(item, "role")), "assistant") {
-				continue
+		if _, ok := item["reasoning_content"]; ok {
+			// DeepSeek's thinking mode requires the field on replayed assistant
+			// turns, so it is emptied rather than dropped; the repair below fills
+			// it back in for the providers that need a value.
+			item["reasoning_content"] = ""
+			stripped++
+		}
+		if reasoning, ok := item["reasoning"].(map[string]any); ok {
+			if _, ok := reasoning["encrypted_content"]; ok {
+				delete(reasoning, "encrypted_content")
+				stripped++
 			}
-			if !pending && !hasReasoningContent(item) && repaired < maxCompatReasoningRepairs {
-				item["reasoning_content"] = compatReasoningPlaceholder
-				repaired++
-			}
-			pending = false
-		case "function_call", "custom_tool_call":
-			if !pending && !hasReasoningContent(item) && repaired < maxCompatReasoningRepairs {
-				item["reasoning_content"] = compatReasoningPlaceholder
-				repaired++
-			}
-			pending = false
+		}
+		// Tool-result items (function_call_output / custom_tool_call_output)
+		// carry the same account-bound encryption on their `output`, either as a
+		// sibling field or inside structured output content parts. The item is
+		// paired by `call_id`, so only the encrypted state is removed; the
+		// readable output text and the pairing key stay.
+		stripped += stripEncryptedToolOutput(item)
+	}
+	return stripped
+}
+
+// stripEncryptedToolOutput removes account-bound encrypted state carried on a
+// tool-result item's `output`. `output` may be a string (left untouched) or an
+// array of content parts, any of which can hold an `encrypted_content` field
+// alongside its readable text. Returns how many fields were removed.
+func stripEncryptedToolOutput(item map[string]any) int {
+	parts, ok := item["output"].([]any)
+	if !ok {
+		return 0
+	}
+	stripped := 0
+	for _, raw := range parts {
+		part, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, ok := part["encrypted_content"]; ok {
+			delete(part, "encrypted_content")
+			stripped++
 		}
 	}
-	return repaired
+	return stripped
+}
+
+// repairCompatReasoning makes an API-provider request satisfy the thinking-mode
+// contract. Returns how many items were repaired.
+//
+// Only a Chat Completions body is repaired this way. The Responses shape must be
+// left alone: the plugin's own provider there is Codex, whose upstream validates
+// every `input[]` item and answers
+//
+//	Unknown parameter: 'input[194].reasoning_content'. (code unknown_parameter)
+//
+// for a field it does not define. A Responses conversation already carries its
+// own `reasoning` items and the host translator turns them into the provider's
+// reasoning field, so the placeholder is only needed on the Chat Completions
+// history a Codex conversation is replayed as.
+func repairCompatReasoning(payload map[string]any) int {
+	if messages, ok := payload["messages"].([]any); ok {
+		return repairChatReasoning(messages)
+	}
+	return 0
 }
 
 // repairChatReasoning walks a Chat Completions payload. The provider only
@@ -228,9 +314,65 @@ func repairChatReasoning(messages []any) int {
 	return repaired
 }
 
+// compatRequestKey fingerprints the caller credential so reasoning state that
+// failed hydration can be remembered per Key without storing the Key itself.
+func compatRequestKey(headers http.Header) string {
+	if headers == nil {
+		return ""
+	}
+	token := strings.TrimSpace(headers.Get("Authorization"))
+	if token == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:8])
+}
+
 // dispatcherServedByAPI reports whether the host dispatched this attempt to an
 // OpenAI-compatible API provider, i.e. the bound key's fallback rather than one
 // of its own accounts.
 func dispatcherServedByAPI(req pluginapi.ExecutorRequest) bool {
 	return service.IsAPIProviderAuth(strings.TrimSpace(req.AuthProvider), requestAuthID(req))
+}
+
+// compatTargetsAPIProvider reports whether this attempt may reach an
+// OpenAI-compatible API provider, even though the plugin selected one of the
+// key's own OAuth accounts.
+//
+// The host's conductor is not bound by the plugin's pick: with round-robin
+// routing and the request-scoped `continue` rules, an overloaded account makes it
+// retry the same request on another credential of the same model, which can be
+// the OpenAI-compatible provider the candidate window carries. The plugin learns
+// that from the scheduler pick, so it records the models whose window offers one
+// and repairs those bodies too. Without it the repair never ran on such
+// attempts - the plugin saw `auth_provider=codex` - and the provider answered
+// with the thinking-mode rejection this file exists to prevent.
+func compatTargetsAPIProvider(req pluginapi.ExecutorRequest) bool {
+	if dispatcherServedByAPI(req) {
+		return true
+	}
+	if apiTargetForModels(req.Model) {
+		return true
+	}
+	return false
+}
+
+// pickCandidatesServeAPI reports whether any provider key of a scheduling window
+// belongs to an OpenAI-compatible API provider.
+func pickCandidatesServeAPI(providers []string, candidates []service.AuthPickCandidate) bool {
+	for _, provider := range providers {
+		if isAPIProviderKey(provider) {
+			return true
+		}
+	}
+	for _, candidate := range candidates {
+		if isAPIProviderKey(candidate.Provider) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAPIProviderKey(provider string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(provider)), "openai-compatible")
 }
