@@ -514,16 +514,24 @@ func hostModelExecute(hostCallbackID string, req pluginapi.ExecutorRequest, body
 func prepareCompatBody(req rpcExecutorRequest, body []byte) []byte {
 	rewritten := body
 	var stripped []string
-	// The remembered failure is checked before the provider judgment: it is
-	// evidence that this replay genuinely carried state another account could not
-	// hydrate, which is stronger than any inference about the candidate window.
-	if compatReasoningPoisoned(compatRequestKey(req.Headers), req.Model) {
+	targetsAPI := compatTargetsAPIProvider(req.ExecutorRequest)
+	// Account-bound reasoning state is stripped before the request is ever sent
+	// whenever this attempt can reach an OpenAI-compatible API provider, or when
+	// this credential and model already failed hydration once. Relying on the
+	// post-send retry is not enough: the upstream encrypted-content rejection
+	// (code thinking_signature_invalid, including the "Encrypted function output
+	// content" and per-item "encrypted content ... could not be verified"
+	// variants) usually arrives after early stream events have already been
+	// forwarded, so emitted is true and the strip retry window is closed. A
+	// provider that cannot decrypt the account-bound state must never be handed
+	// it in the first place.
+	if targetsAPI || compatReasoningPoisoned(compatRequestKey(req.Headers), req.Model) {
 		if strippedBody, count := stripCompatEncryptedReasoning(rewritten); count > 0 {
 			rewritten = strippedBody
 			stripped = append(stripped, strconv.Itoa(count)+"x encrypted_reasoning:stripped")
 		}
 	}
-	if compatTargetsAPIProvider(req.ExecutorRequest) {
+	if targetsAPI {
 		sanitizedBody, sanitized := sanitizeCompatRequestBody(rewritten)
 		rewritten = sanitizedBody
 		stripped = append(stripped, sanitized...)
