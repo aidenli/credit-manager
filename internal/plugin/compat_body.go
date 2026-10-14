@@ -212,6 +212,12 @@ func stripEncryptedReasoningEntries(items []any) int {
 		if !ok {
 			continue
 		}
+		if isCompactionItem(item) {
+			// A compaction item requires its encrypted_content (removing the
+			// field alone is rejected with missing_required_parameter), so it is
+			// left whole here; dropCompactionItems removes it as a unit.
+			continue
+		}
 		if _, ok := item["encrypted_content"]; ok {
 			delete(item, "encrypted_content")
 			delete(item, "id")
@@ -238,6 +244,46 @@ func stripEncryptedReasoningEntries(items []any) int {
 		stripped += stripEncryptedToolOutput(item)
 	}
 	return stripped
+}
+
+func isCompactionItem(item map[string]any) bool {
+	switch strings.TrimSpace(stringField(item, "type")) {
+	case "compaction", "compaction_summary":
+		return true
+	}
+	return false
+}
+
+// dropCompactionItems removes whole compaction items from a Responses body. It
+// is the last resort for a provider that cannot decrypt them (an API provider,
+// or another account after the reasoning-only strip still failed): the request
+// stays valid at the cost of the compacted history. Returns how many were removed.
+func dropCompactionItems(body []byte) ([]byte, int) {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
+		return body, 0
+	}
+	input, ok := payload["input"].([]any)
+	if !ok {
+		return body, 0
+	}
+	kept := make([]any, 0, len(input))
+	for _, raw := range input {
+		if item, ok := raw.(map[string]any); ok && isCompactionItem(item) {
+			continue
+		}
+		kept = append(kept, raw)
+	}
+	dropped := len(input) - len(kept)
+	if dropped == 0 {
+		return body, 0
+	}
+	payload["input"] = kept
+	rewritten, err := json.Marshal(payload)
+	if err != nil {
+		return body, 0
+	}
+	return rewritten, dropped
 }
 
 // stripEncryptedToolOutput removes account-bound encrypted state carried on a
