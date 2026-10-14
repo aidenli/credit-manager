@@ -206,7 +206,9 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 	body = prepareCompatBody(req, body)
 	fallback := newAPIFallback(svc, key)
 	stripped := false
-	// Bounded: the strip retry and the API fallback each fire at most once.
+	compactionDropped := false
+	// Bounded: the strip retry, the compaction drop and the API fallback each
+	// fire at most once.
 	for {
 		stream, err := openUpstreamStream(req, body)
 		if err != nil {
@@ -256,6 +258,19 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 				if count > 0 {
 					hostLogCompatFallback(req.HostCallbackID, req.Model, req.AuthProvider,
 						[]string{strconv.Itoa(count) + "x encrypted_reasoning:stripped"})
+					continue
+				}
+			}
+			if isEncryptedReasoningFailure(failure) && !compactionDropped {
+				// The remaining account-bound state is a compaction item, which
+				// cannot lose only its encrypted_content; drop it whole so the
+				// conversation goes on without the compacted history.
+				compactionDropped = true
+				var count int
+				body, count = dropCompactionItems(body)
+				if count > 0 {
+					hostLogCompatFallback(req.HostCallbackID, req.Model, req.AuthProvider,
+						[]string{strconv.Itoa(count) + "x compaction:dropped"})
 					continue
 				}
 			}
@@ -445,7 +460,7 @@ func pumpUpstreamStream(
 // account-bound reasoning rejection the stripped retry exists for.
 func isEncryptedReasoningFailure(text string) bool {
 	lower := strings.ToLower(text)
-	if strings.Contains(lower, stripEncryptedRetryText) {
+	if strings.Contains(lower, stripEncryptedRetryText) || strings.Contains(lower, "invalid_encrypted_content") {
 		return true
 	}
 	return strings.Contains(lower, "encrypted content") && strings.Contains(lower, "could not be verified")
@@ -571,6 +586,7 @@ func prepareCompatBody(req rpcExecutorRequest, body []byte) []byte {
 	rewritten := body
 	var stripped []string
 	targetsAPI := compatTargetsAPIProvider(req.ExecutorRequest)
+	servedByAPI := dispatcherServedByAPI(req.ExecutorRequest)
 	// Account-bound reasoning state is stripped before the request is ever sent
 	// whenever this attempt can reach an OpenAI-compatible API provider, or when
 	// this credential and model already failed hydration once. The post-send
@@ -581,10 +597,23 @@ func prepareCompatBody(req rpcExecutorRequest, body []byte) []byte {
 	// been forwarded, when emitted is true and the retry window is closed. A
 	// provider that cannot decrypt the account-bound state must never be handed
 	// it in the first place.
-	if targetsAPI || compatReasoningPoisoned(compatRequestKey(req.Headers), req.Model) {
+	//
+	// Only an attempt the host actually dispatched to an API provider counts
+	// here. A model whose scheduling window merely offered one is still served
+	// by its own OAuth account most of the time, and stripping that replay up
+	// front threw away state the account could decrypt (and broke compaction
+	// items, whose encrypted_content is required). A cross-account rejection is
+	// left to the post-send retry, as sub2api does.
+	if servedByAPI || compatReasoningPoisoned(compatRequestKey(req.Headers), req.Model) {
 		if strippedBody, count := stripCompatEncryptedReasoning(rewritten); count > 0 {
 			rewritten = strippedBody
 			stripped = append(stripped, strconv.Itoa(count)+"x encrypted_reasoning:stripped")
+		}
+	}
+	if servedByAPI {
+		if droppedBody, count := dropCompactionItems(rewritten); count > 0 {
+			rewritten = droppedBody
+			stripped = append(stripped, strconv.Itoa(count)+"x compaction:dropped")
 		}
 	}
 	if targetsAPI {

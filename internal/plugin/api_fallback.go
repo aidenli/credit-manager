@@ -78,6 +78,7 @@ func (fb *apiFallback) take(ctx context.Context, req *rpcExecutorRequest, body *
 // the model is replaced with the one the provider serves.
 func apiFallbackBody(body []byte, model string) []byte {
 	body, _ = stripCompatEncryptedReasoning(body)
+	body, _ = dropCompactionItems(body)
 	body, _ = sanitizeCompatRequestBody(body)
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil || payload == nil {

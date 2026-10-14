@@ -208,35 +208,59 @@ func TestPrepareCompatBodyStripsAfterMarkedFailure(t *testing.T) {
 	}
 }
 
-// An attempt that can reach an OpenAI-compatible API provider is stripped before
-// it is ever sent, with no prior failure: the post-send retry window is closed
-// once early stream events are forwarded, so the account-bound state the API
-// provider cannot decrypt must not be handed over in the first place.
-func TestPrepareCompatBodyStripsForAPITargetWithoutPriorFailure(t *testing.T) {
+// A codex attempt keeps its encrypted state even when the model's scheduling
+// window offered an API provider: the account itself can decrypt it, and a
+// compaction item without its required encrypted_content is rejected upstream
+// ("Missing required parameter: 'input[50].encrypted_content'").
+func TestPrepareCompatBodyKeepsEncryptedStateForCodexWithAPIWindow(t *testing.T) {
 	resetCompatAPITargets()
 	t.Cleanup(resetCompatAPITargets)
-
-	// The model whose scheduling window offered an API provider is remembered;
-	// no credential has been poisoned.
 	recordCompatAPITarget("gpt-6-astra")
 
-	body := []byte(`{"model":"gpt-6-astra","input":[{"type":"reasoning","id":"rs_a","encrypted_content":"gAAAA-account-a","summary":[{"type":"summary_text","text":"planned"}]},{"type":"function_call_output","call_id":"call_1","id":"fco_a","encrypted_content":"gAAAA-fn-a","output":"result text"}],"max_output_tokens":16}`)
+	body := []byte(`{"model":"gpt-6-astra","input":[{"type":"reasoning","id":"rs_a","encrypted_content":"gAAAA-account-a","summary":[]},{"type":"compaction","encrypted_content":"gAAAA-cmp-a"}],"max_output_tokens":16}`)
 	headers := http.Header{"Authorization": []string{"Bearer tk-fresh"}}
 	request := rpcExecutorRequest{ExecutorRequest: pluginapi.ExecutorRequest{
 		Model: "gpt-6-astra", AuthProvider: "codex", Headers: headers, Payload: body,
 	}}
 
 	rewritten := string(prepareCompatBody(request, body))
-	if strings.Contains(rewritten, "encrypted_content") {
-		t.Fatalf("API-targeted replay was not stripped before send: %s", rewritten)
+	if !strings.Contains(rewritten, "gAAAA-account-a") || !strings.Contains(rewritten, "gAAAA-cmp-a") {
+		t.Fatalf("codex replay lost encrypted state before send: %s", rewritten)
 	}
-	if strings.Contains(rewritten, "gAAAA-account-a") || strings.Contains(rewritten, "gAAAA-fn-a") {
-		t.Fatalf("account-bound blobs survived pre-send strip: %s", rewritten)
+}
+
+// The reasoning strip never leaves a compaction item without its required
+// encrypted_content; dropCompactionItems removes the item whole.
+func TestCompactionItemsStayValid(t *testing.T) {
+	body := []byte(`{"model":"m","input":[{"type":"compaction","id":"cmp_1","encrypted_content":"gAAAA-cmp"},{"type":"reasoning","encrypted_content":"gAAAA-rs","summary":[]},{"type":"message","role":"user","content":"hi"}]}`)
+
+	stripped, count := stripCompatEncryptedReasoning(body)
+	if count != 1 || strings.Contains(string(stripped), "gAAAA-rs") {
+		t.Fatalf("reasoning not stripped alone: %d %s", count, stripped)
 	}
-	if !strings.Contains(rewritten, "planned") || !strings.Contains(rewritten, "result text") {
-		t.Fatalf("pre-send strip dropped readable content: %s", rewritten)
+	if !strings.Contains(string(stripped), `"encrypted_content":"gAAAA-cmp"`) || !strings.Contains(string(stripped), "cmp_1") {
+		t.Fatalf("compaction item was modified: %s", stripped)
 	}
-	if !strings.Contains(rewritten, "call_1") {
-		t.Fatalf("pre-send strip dropped the tool-call pairing key: %s", rewritten)
+
+	dropped, n := dropCompactionItems(stripped)
+	if n != 1 || strings.Contains(string(dropped), "compaction") || !strings.Contains(string(dropped), "hi") {
+		t.Fatalf("compaction not dropped whole: %d %s", n, dropped)
+	}
+	if _, n := dropCompactionItems(dropped); n != 0 {
+		t.Fatalf("second drop removed %d items", n)
+	}
+
+	fallback := string(apiFallbackBody(body, "deepseek-flash"))
+	if strings.Contains(fallback, "compaction") || strings.Contains(fallback, "gAAAA") {
+		t.Fatalf("API fallback body kept account-bound state: %s", fallback)
+	}
+}
+
+func TestIsEncryptedReasoningFailureMatchesInvalidEncryptedContent(t *testing.T) {
+	if !isEncryptedReasoningFailure(`{"error":{"code":"invalid_encrypted_content"}}`) {
+		t.Fatal("invalid_encrypted_content not recognized")
+	}
+	if isEncryptedReasoningFailure("Missing required parameter: 'input[50].encrypted_content'.") {
+		t.Fatal("missing_required_parameter must not trigger the strip retry")
 	}
 }
