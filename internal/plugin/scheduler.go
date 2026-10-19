@@ -25,7 +25,7 @@ func pickAuth(raw []byte) ([]byte, error) {
 		if id == "" {
 			continue
 		}
-		candidates = append(candidates, service.AuthPickCandidate{ID: id, Provider: candidate.Provider, Status: candidate.Status})
+		candidates = append(candidates, service.AuthPickCandidate{ID: id, Provider: candidate.Provider, Priority: candidate.Priority, Status: candidate.Status})
 	}
 	// Remember whether this model's window offers an OpenAI-compatible API
 	// provider: the host may dispatch the attempt there even when the plugin

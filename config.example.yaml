@@ -49,10 +49,29 @@ session_affinity:
 
 # API 供应商执行期兜底：OAuth 账号这次请求失败（429、408、5xx、限流、流内 overload /
 # usage_limit / 加密推理校验失败等），且还没有向客户端输出正文时，插件用同一请求改发到这里。
-# 是否启用仍由控制台的兜底开关（auth-quotas/fallback）决定；provider 或 model 留空即关闭。
-# model 会替换客户端请求的模型名，因此任意 gpt 模型都能兜底，不依赖宿主别名表。
-# 注意：宿主 openai-compatibility 里必须能以这个名字路由到该供应商，例如在 deepseek 的
-# models 下加一条不带 alias 的 `- name: deepseek-flash`。
+# 是否启用仍由控制台的兜底开关（auth-quotas/fallback）决定。
+# 下面保留旧的单家默认配置；provider 或 model 留空即关闭执行期兜底。
+# model 替换客户端请求的模型名；宿主必须能把这个名字路由到目标供应商。
 api_fallback:
   provider: openai-compatible-deepseek
   model: deepseek-flash
+  # 多家兜底（可选）：取消下方注释，并将上方 model 改成 credit-fallback。
+  # 每家宿主 openai-compatibility.models 都应为其上游模型配置同名 alias: credit-fallback。
+  # 非空 providers 覆盖旧 provider；仅允许 openai-compatible-<name>，忽略大小写和首尾空白，
+  # 不可重复、不可有空项，且 model 必须非空。providers 为空则保留旧单家行为。
+  # providers:
+  #   - openai-compatible-magpie
+  #   - openai-compatible-deepseek
+  #
+  # 调度期与执行期共用白名单，但轮换单位不同：
+  # 调度期仅在宿主当前候选窗口内选最高 priority 的 API 凭据，同级按凭据 ID 轮换；
+  # 例如同级两家分别有 3 个、1 个凭据时为 3:1，不是提供商均分流量。
+  # 宿主窗口已按优先级筛选，插件不能发现窗口外的低优先级候选；无白名单候选就拒绝。
+  # 执行期从 host.auth.list 快照按 priority 高者先，同级提供商按请求轮换，
+  # 每家强制重放一次；家内仍由宿主重试和冷却。不是按列表顺序，
+  # 也不等同宿主原生的跨提供商/凭据混合调度。
+  # 不存在/被禁用的提供商会跳过；冷却可用性仍由宿主决定；无可用提供商就停止。
+  # 已输出正文、遇到不可重试错误或遍历完白名单后停止，不会无限重试。
+  # 原请求本身为 API 时，仅其提供商也在此白名单内才允许 API→API 切换。
+  # auth.list 读取失败时保留原始失败，不回退旧 provider；未绑定 Key 的路由不变。
+  # 需关闭 CPA Home 路由；Home 模式绕过强制提供商，不支持上述白名单保证。

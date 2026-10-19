@@ -5,72 +5,132 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
+	"sort"
+	"strconv"
 	"strings"
+	"sync/atomic"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	"github.com/yuluo688/credit-manager/internal/service"
 	"github.com/yuluo688/credit-manager/internal/store"
 )
 
-// apiFallback replays one failed OAuth attempt on the configured API provider.
-//
-// The scheduler-time fallback (service.PickAuthForKey) only fires when no bound
-// account is offered at all, and it can only pick an API provider that the host
-// put into the candidate window, which the host does only for models the
-// provider aliases. Neither helps when the account was offered, ran, and failed
-// with 429/5xx/overload. This executor-time fallback covers that case: the plugin
-// pins the replay to the API provider itself and rewrites the model, so any
-// model can fall back.
-//
-// It fires at most once per request and only while nothing has reached the
-// client yet, because a half-answered stream cannot be restarted invisibly.
+// apiFallback replays recoverable failures before output, once per API provider.
+// The shared model alias maps to each provider's own upstream model in CPA.
+// Provider-local retries and cooldowns remain with the host; every replay stays
+// forced to an allowed provider rather than exposing the key to unbound OAuth.
 type apiFallback struct {
-	svc      *service.Service
-	key      store.PluginKey
-	provider string
-	model    string
-	used     bool
+	svc           *service.Service
+	key           store.PluginKey
+	providers     []string
+	model         string
+	multi         bool
+	loaded        bool
+	remaining     []string
+	originalModel string
 }
 
 func newAPIFallback(svc *service.Service, key store.PluginKey) *apiFallback {
 	fb := &apiFallback{svc: svc, key: key}
-	if svc == nil {
-		return fb
+	if svc != nil {
+		cfg := svc.Config().APIFallback
+		fb.providers = cfg.ProviderKeys()
+		fb.model = strings.TrimSpace(cfg.Model)
+		fb.multi = len(cfg.Providers) > 0
 	}
-	cfg := svc.Config().APIFallback
-	fb.provider = strings.TrimSpace(cfg.Provider)
-	fb.model = strings.TrimSpace(cfg.Model)
 	return fb
 }
 
-// take decides whether the failed attempt described by req should be replayed
-// on the API provider. When it should, req and body are rewritten in place for
-// the replay and true is returned.
+// take rewrites req and body for the next allowed replay. Callers must stop
+// calling it once any output has reached the client.
 func (fb *apiFallback) take(ctx context.Context, req *rpcExecutorRequest, body *[]byte, failure string) bool {
-	if fb == nil || fb.used || fb.provider == "" || fb.model == "" || fb.svc == nil {
+	if fb == nil || fb.svc == nil || len(fb.providers) == 0 || fb.model == "" ||
+		!fb.svc.AuthFallbackOn() || ctx.Err() != nil || !isFallbackWorthyFailure(failure) {
 		return false
 	}
-	if !fb.svc.AuthFallbackOn() {
+	if !fb.loaded {
+		current := strings.ToLower(strings.TrimSpace(req.AuthProvider))
+		if service.IsAPIProviderAuth(req.AuthProvider, req.AuthID) &&
+			(!fb.multi || !slices.Contains(fb.providers, current)) {
+			return false
+		}
+		fb.loaded = true
+		fb.originalModel = req.Model
+		fb.remaining = fb.providers
+		if fb.multi {
+			var err error
+			fb.remaining, err = hostAPIFallbackOrder(fb.providers, current)
+			if err != nil {
+				hostLog("warn", "credit-manager cannot read API fallback priorities", nil, req.HostCallbackID)
+				return false
+			}
+		}
+	}
+	if len(fb.remaining) == 0 {
 		return false
 	}
-	// An attempt that already ran on an API provider has nothing to fall to.
-	if service.IsAPIProviderAuth(req.AuthProvider, req.AuthID) {
-		return false
-	}
-	if !isFallbackWorthyFailure(failure) {
-		return false
-	}
-	fb.used = true
-	originalModel := req.Model
-	next := *req
-	next.ExecutorRequest.Model = fb.model
-	next.ExecutorRequest.AuthProvider = fb.provider
-	next.ExecutorRequest.AuthID = ""
-	*req = next
+	provider := fb.remaining[0]
+	fb.remaining = fb.remaining[1:]
+	req.ExecutorRequest.Model = fb.model
+	req.ExecutorRequest.AuthProvider = provider
+	req.ExecutorRequest.AuthID = ""
 	*body = apiFallbackBody(*body, fb.model)
-	hostLog("warn", "credit-manager falling back to API provider: model="+originalModel+" -> "+fb.provider+"/"+fb.model,
-		map[string]any{"model": originalModel, "provider": fb.provider}, req.HostCallbackID)
-	fb.svc.RecordUpstreamFallback(ctx, fb.key, fb.provider, originalModel)
+	hostLog("warn", "credit-manager falling back to API provider: model="+fb.originalModel+" -> "+provider+"/"+fb.model,
+		map[string]any{"model": fb.originalModel, "provider": provider}, req.HostCallbackID)
+	fb.svc.RecordUpstreamFallback(ctx, fb.key, provider, fb.originalModel)
 	return true
+}
+
+var apiFallbackCursor atomic.Uint64
+
+// The SDK accepts only one forced provider, so order provider snapshots here
+// without clearing the provider boundary. Host availability remains model-specific.
+func hostAPIFallbackOrder(allowed []string, current string) ([]string, error) {
+	raw, err := callHost(pluginabi.MethodHostAuthList, map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		Files []pluginapi.HostAuthFileEntry `json:"files"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return nil, err
+	}
+	priorities := make(map[string]int)
+	for _, entry := range response.Files {
+		provider := strings.ToLower(strings.TrimSpace(entry.Provider))
+		if provider == current || entry.Disabled || strings.EqualFold(strings.TrimSpace(entry.Status), "disabled") ||
+			!slices.Contains(allowed, provider) || !strings.HasPrefix(provider, "openai-compatible-") {
+			continue
+		}
+		if previous, ok := priorities[provider]; !ok || entry.Priority > previous {
+			priorities[provider] = entry.Priority
+		}
+	}
+	providers := make([]string, 0, len(priorities))
+	for provider := range priorities {
+		providers = append(providers, provider)
+	}
+	sort.Slice(providers, func(i, j int) bool {
+		if priorities[providers[i]] != priorities[providers[j]] {
+			return priorities[providers[i]] > priorities[providers[j]]
+		}
+		return providers[i] < providers[j]
+	})
+	cursor := apiFallbackCursor.Add(1) - 1
+	for start := 0; start < len(providers); {
+		end := start + 1
+		for end < len(providers) && priorities[providers[end]] == priorities[providers[start]] {
+			end++
+		}
+		tier := append([]string(nil), providers[start:end]...)
+		offset := int(cursor % uint64(len(tier)))
+		copy(providers[start:end], append(tier[offset:], tier[:offset]...))
+		start = end
+	}
+	return providers, nil
 }
 
 // apiFallbackBody prepares a body for the API provider: the account-bound
@@ -122,6 +182,14 @@ func isFallbackWorthyFailure(text string) bool {
 	lower := strings.ToLower(strings.TrimSpace(text))
 	if lower == "" {
 		return false
+	}
+	fields := strings.Fields(lower)
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] == "status" {
+			if status, err := strconv.Atoi(strings.TrimRight(fields[i+1], ":,")); err == nil && isFallbackWorthyStatus(status) {
+				return true
+			}
+		}
 	}
 	for _, marker := range fallbackWorthyMarkers {
 		if strings.Contains(lower, marker) {

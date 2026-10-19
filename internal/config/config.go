@@ -96,14 +96,39 @@ type SessionAffinityConfig struct {
 
 // APIFallbackConfig names the API provider a failed OAuth attempt is replayed
 // on. The runtime switch (console: auth-quotas/fallback) still decides whether
-// the fallback runs at all; this only says where it goes. Leaving either field
-// empty disables the execution-time fallback.
+// the fallback runs at all; this only says where it goes. Leaving every provider
+// field empty disables the execution-time fallback.
 type APIFallbackConfig struct {
-	// Provider is the host provider key, "openai-compatible-<name>".
+	// Provider is the legacy single host provider key,
+	// "openai-compatible-<name>". Providers replaces it when nonempty.
 	Provider string `yaml:"provider" json:"provider"`
-	// Model is sent to that provider whatever model the client asked for, so
-	// every model can fall back, not only the ones the provider aliases.
+	// Providers is an API-only host provider allowlist; host priority decides
+	// the attempt order. Nonempty Providers overrides the legacy Provider.
+	// Entries are canonicalized to lower case by ParseYAML.
+	Providers []string `yaml:"providers" json:"providers"`
+	// Model is sent to every provider whatever model the client asked for, so
+	// every model can fall back, not only the ones a provider aliases. A shared
+	// model keeps the allowlist a list of providers rather than provider/model
+	// pairs; give each provider a host alias for the same name instead.
 	Model string `yaml:"model" json:"model"`
+}
+
+// ProviderKeys returns the effective provider allowlist: Providers when set,
+// otherwise the legacy Provider. It returns a trimmed, lower-case copy so
+// direct struct construction follows the same canonical form as ParseYAML.
+func (c APIFallbackConfig) ProviderKeys() []string {
+	values := c.Providers
+	if len(values) == 0 {
+		if strings.TrimSpace(c.Provider) == "" {
+			return nil
+		}
+		values = []string{c.Provider}
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, strings.ToLower(strings.TrimSpace(value)))
+	}
+	return out
 }
 
 // Config is the plugin YAML configuration loaded by the host and/or config_file.
@@ -171,6 +196,9 @@ func ParseYAML(raw []byte) (Config, error) {
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
+	}
+	if len(cfg.APIFallback.Providers) > 0 {
+		cfg.APIFallback.Providers = cfg.APIFallback.ProviderKeys()
 	}
 	return cfg, nil
 }
@@ -309,8 +337,48 @@ func (c Config) Validate() error {
 		errs = append(errs, fmt.Errorf("settlement.missing_usage %q is invalid", c.Settlement.MissingUsage))
 	}
 
+	if err := validateAPIFallback(c.APIFallback); err != nil {
+		errs = append(errs, err)
+	}
+
 	if _, err := c.LoadPeppers(); err != nil {
 		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// validateAPIFallback keeps the multi-provider allowlist limited to the host's
+// API-provider key shape. It is a no-op for the legacy scalar configuration,
+// whose empty model means "fallback disabled" rather than an error.
+func validateAPIFallback(c APIFallbackConfig) error {
+	if len(c.Providers) == 0 {
+		return nil
+	}
+	var errs []error
+	seen := make(map[string]struct{}, len(c.Providers))
+	for _, value := range c.Providers {
+		canonical := strings.ToLower(strings.TrimSpace(value))
+		if canonical == "" {
+			errs = append(errs, errors.New("api_fallback.providers must not contain empty entries"))
+			continue
+		}
+		if !strings.HasPrefix(canonical, "openai-compatible-") {
+			errs = append(errs, fmt.Errorf("api_fallback.providers %q must be an API provider key", value))
+			continue
+		}
+		suffix := strings.TrimPrefix(canonical, "openai-compatible-")
+		if suffix == "" || strings.ContainsAny(suffix, " \t\r\n") {
+			errs = append(errs, fmt.Errorf("api_fallback.providers %q must be an API provider key", value))
+			continue
+		}
+		if _, exists := seen[canonical]; exists {
+			errs = append(errs, fmt.Errorf("api_fallback.providers contains duplicate provider %q", canonical))
+			continue
+		}
+		seen[canonical] = struct{}{}
+	}
+	if strings.TrimSpace(c.Model) == "" {
+		errs = append(errs, errors.New("api_fallback.model is required when api_fallback.providers is set"))
 	}
 	return errors.Join(errs...)
 }

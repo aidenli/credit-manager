@@ -251,6 +251,15 @@
     availableModels: [],
     keyAuthAccounts: [],
     keyAuthAccountsLoaded: false,
+    keyBindingAccounts: [],
+    keyBindingKeys: [],
+    keyBindingLoaded: false,
+    keyBindingAccountID: '',
+    keyBindingAdded: new Set(),
+    keyBindingRemoved: new Set(),
+    keyBindingLeftChecked: new Set(),
+    keyBindingRightChecked: new Set(),
+    keyBindingSaving: false,
     pricingPage: 1,
     pricingPageSize: 10,
     pricingSearch: '',
@@ -1477,6 +1486,267 @@
     if (event.target.closest('.chart-connect-action')) openConnectionModal();
   });
 
+  // ---- Key 关联：按账号维度批量绑定/解绑 ----
+
+  // The console has no account->keys endpoint, so the account dimension is a
+  // client-side flip of each key's auth_bindings. Saving reuses keys/update one
+  // key at a time, exactly like the reference admin: empty bindings = unrestricted.
+  function keyBindingDraftDirty() {
+    return state.keyBindingAdded.size > 0 || state.keyBindingRemoved.size > 0;
+  }
+
+  function keyBindingSelectedAccount() {
+    return (state.keyBindingAccounts || []).find(acc => acc.auth_id === state.keyBindingAccountID) || null;
+  }
+
+  function keyBindingIsBound(key, account) {
+    if (!account) return false;
+    const wanted = bindingKey(account.provider, account.auth_id);
+    return (Array.isArray(key.auth_bindings) ? key.auth_bindings : [])
+      .some(b => bindingKey(b.provider, b.auth_id) === wanted);
+  }
+
+  function keyBindingSide(key, account) {
+    const bound = keyBindingIsBound(key, account);
+    const inRight = (bound && !state.keyBindingRemoved.has(key.id)) || state.keyBindingAdded.has(key.id);
+    return inRight ? 'selected' : 'available';
+  }
+
+  function keyBindingResetDraft() {
+    state.keyBindingAdded = new Set();
+    state.keyBindingRemoved = new Set();
+    state.keyBindingLeftChecked = new Set();
+    state.keyBindingRightChecked = new Set();
+  }
+
+  async function loadKeyBindingData() {
+    const seq = ++state.tabLoadSeq;
+    const hint = $('keyBindingAccountHint');
+    if (hint) hint.textContent = '加载中…';
+    let accounts;
+    try {
+      accounts = await loadKeyAuthAccounts();
+    } catch (e) {
+      if (seq === state.tabLoadSeq && hint) hint.textContent = '账号加载失败：' + (e && e.message ? e.message : e);
+      throw e;
+    }
+    // Load every key, not just one page: the picker needs the full set.
+    const keys = [];
+    let page = 1;
+    for (;;) {
+      const data = await api('GET', 'credit-manager/keys?page=' + page + '&page_size=100&active_only=1');
+      if (seq !== state.tabLoadSeq) return;
+      (data.items || []).filter(k => !k.revoked_at).forEach(k => keys.push(k));
+      const totalPages = Number(data.total_pages || 0);
+      if (!totalPages || page >= totalPages) break;
+      page += 1;
+    }
+    state.keyBindingAccounts = accounts.filter(acc => acc.auth_id);
+    state.keyBindingKeys = keys;
+    state.keyBindingLoaded = true;
+    if (!state.keyBindingAccounts.some(acc => acc.auth_id === state.keyBindingAccountID)) {
+      state.keyBindingAccountID = '';
+      keyBindingResetDraft();
+    }
+    renderKeyBindingAccountOptions();
+    renderKeyBinding();
+    if (hint) hint.textContent = state.keyBindingAccountID ? '' : '共 ' + keys.length + ' 个 Key';
+  }
+
+  function renderKeyBindingAccountOptions() {
+    const select = $('keyBindingAccount');
+    if (!select) return;
+    const accounts = (state.keyBindingAccounts || []).slice()
+      .sort((a, b) => bindingLabel(a).localeCompare(bindingLabel(b)));
+    const current = state.keyBindingAccountID;
+    select.innerHTML = '<option value="">请选择账号</option>' + accounts.map(acc => {
+      const on = acc.auth_id === current ? ' selected' : '';
+      return '<option value="' + esc(acc.auth_id) + '"' + on + '>' + esc(bindingLabel(acc)) + '</option>';
+    }).join('');
+  }
+
+  function keyBindingMatchesQuery(key, query) {
+    if (!query) return true;
+    return [key.label, key.kid, key.id, key.fingerprint]
+      .some(v => String(v || '').toLowerCase().includes(query));
+  }
+
+  function keyBindingItemHTML(key, side, account) {
+    const checked = (side === 'available' ? state.keyBindingLeftChecked : state.keyBindingRightChecked).has(key.id);
+    let tag = '';
+    if (state.keyBindingAdded.has(key.id)) tag = '<span class="key-binding-item-tag add">待添加</span>';
+    else if (state.keyBindingRemoved.has(key.id)) tag = '<span class="key-binding-item-tag remove">待移除</span>';
+    else if (side === 'available') {
+      const others = (Array.isArray(key.auth_bindings) ? key.auth_bindings : []).length;
+      if (others > 0) tag = '<span class="key-binding-item-tag other" title="该 Key 已绑定其他账号">另绑 ' + others + '</span>';
+    }
+    const name = key.label || key.kid || key.id;
+    const sub = key.fingerprint ? 'fp ' + key.fingerprint : key.id;
+    return '<label class="key-binding-item' + (checked ? ' is-checked' : '') + '" data-key-id="' + esc(key.id) + '">' +
+      '<input type="checkbox"' + (checked ? ' checked' : '') + '/>' +
+      '<span class="key-binding-item-main">' +
+        '<span class="key-binding-item-name">' + esc(name) + (key.kid ? '<span class="mono">#' + esc(key.kid) + '</span>' : '') + tag + '</span>' +
+        '<span class="key-binding-item-sub" title="' + esc(key.id) + '">' + esc(sub) + '</span>' +
+      '</span></label>';
+  }
+
+  function renderKeyBinding() {
+    const account = keyBindingSelectedAccount();
+    const empty = $('keyBindingEmpty');
+    const panels = $('keyBindingPanels');
+    if (!account) {
+      if (empty) empty.classList.remove('hidden');
+      if (panels) panels.classList.add('hidden');
+      updateKeyBindingActions();
+      return;
+    }
+    if (empty) empty.classList.add('hidden');
+    if (panels) panels.classList.remove('hidden');
+
+    const leftQuery = ($('keyBindingAvailableFilter').value || '').trim().toLowerCase();
+    const rightQuery = ($('keyBindingSelectedFilter').value || '').trim().toLowerCase();
+    const left = [];
+    const right = [];
+    (state.keyBindingKeys || []).forEach(key => {
+      if (keyBindingSide(key, account) === 'selected') right.push(key); else left.push(key);
+    });
+    const sortKeys = arr => arr.sort((a, b) => String(a.label || a.kid || a.id).localeCompare(String(b.label || b.kid || b.id)));
+    sortKeys(left); sortKeys(right);
+    const leftVisible = left.filter(k => keyBindingMatchesQuery(k, leftQuery));
+    const rightVisible = right.filter(k => keyBindingMatchesQuery(k, rightQuery));
+
+    const leftList = $('keyBindingAvailableList');
+    const rightList = $('keyBindingSelectedList');
+    leftList.innerHTML = leftVisible.length
+      ? leftVisible.map(k => keyBindingItemHTML(k, 'available', account)).join('')
+      : '<div class="key-binding-list-empty">' + (left.length ? '无匹配的 Key' : '没有可添加的 Key') + '</div>';
+    rightList.innerHTML = rightVisible.length
+      ? rightVisible.map(k => keyBindingItemHTML(k, 'selected', account)).join('')
+      : '<div class="key-binding-list-empty">' + (right.length ? '无匹配的 Key' : '该账号暂无关联 Key') + '</div>';
+
+    $('keyBindingAvailableCount').textContent = '已选 ' + state.keyBindingLeftChecked.size + ' / ' + left.length;
+    $('keyBindingSelectedCount').textContent = '已选 ' + state.keyBindingRightChecked.size + ' / ' + right.length;
+    updateKeyBindingActions();
+  }
+
+  function updateKeyBindingActions() {
+    const dirty = keyBindingDraftDirty();
+    const saving = state.keyBindingSaving;
+    $('keyBindingAccount').disabled = saving;
+    $('btnKeyBindingAdd').disabled = saving || state.keyBindingLeftChecked.size === 0;
+    $('btnKeyBindingRemove').disabled = saving || state.keyBindingRightChecked.size === 0;
+    $('btnKeyBindingReset').disabled = saving || !dirty;
+    $('btnKeyBindingSave').disabled = saving || !dirty;
+    const count = $('keyBindingSaveCount');
+    if (count) {
+      if (dirty) { count.hidden = false; count.textContent = '+' + state.keyBindingAdded.size + ' / −' + state.keyBindingRemoved.size; }
+      else count.hidden = true;
+    }
+  }
+
+  function keyBindingMoveRight() {
+    if (state.keyBindingSaving) return;
+    state.keyBindingLeftChecked.forEach(id => {
+      if (state.keyBindingRemoved.has(id)) state.keyBindingRemoved.delete(id);
+      else state.keyBindingAdded.add(id);
+    });
+    state.keyBindingLeftChecked = new Set();
+    renderKeyBinding();
+  }
+
+  function keyBindingMoveLeft() {
+    if (state.keyBindingSaving) return;
+    state.keyBindingRightChecked.forEach(id => {
+      if (state.keyBindingAdded.has(id)) state.keyBindingAdded.delete(id);
+      else state.keyBindingRemoved.add(id);
+    });
+    state.keyBindingRightChecked = new Set();
+    renderKeyBinding();
+  }
+
+  function keyBindingChangeAccount(id) {
+    if (state.keyBindingSaving) {
+      renderKeyBindingAccountOptions();
+      return;
+    }
+    if (id === state.keyBindingAccountID) return;
+    if (keyBindingDraftDirty() && !window.confirm('有未保存的变更，切换账号会丢弃它们。确定继续吗？')) {
+      renderKeyBindingAccountOptions();
+      return;
+    }
+    state.keyBindingAccountID = id;
+    keyBindingResetDraft();
+    renderKeyBinding();
+    const hint = $('keyBindingAccountHint');
+    if (hint) hint.textContent = '';
+  }
+
+  async function keyBindingSave() {
+    const account = keyBindingSelectedAccount();
+    if (!account || !keyBindingDraftDirty() || state.keyBindingSaving) return;
+    const added = new Set(state.keyBindingAdded);
+    const removed = new Set(state.keyBindingRemoved);
+    state.keyBindingSaving = true;
+    updateKeyBindingActions();
+    try {
+      // Re-fetch so concurrent edits elsewhere are not clobbered, then diff against
+      // the fresh binding set rather than the possibly-stale cached one.
+      const fresh = new Map();
+      let page = 1;
+      for (;;) {
+        const data = await api('GET', 'credit-manager/keys?page=' + page + '&page_size=100&active_only=1');
+        (data.items || []).filter(k => !k.revoked_at).forEach(k => fresh.set(k.id, k));
+        const totalPages = Number(data.total_pages || 0);
+        if (!totalPages || page >= totalPages) break;
+        page += 1;
+      }
+      const wanted = bindingKey(account.provider, account.auth_id);
+      const plans = [];
+      added.forEach(id => {
+        const k = fresh.get(id);
+        if (!k || keyBindingIsBound(k, account)) return;
+        const next = (Array.isArray(k.auth_bindings) ? k.auth_bindings : [])
+          .map(b => ({ provider: b.provider, auth_id: b.auth_id }));
+        next.push({ provider: account.provider, auth_id: account.auth_id });
+        plans.push({ key: k, next, widensIfRemoved: false, narrows: next.length === 1 });
+      });
+      removed.forEach(id => {
+        const k = fresh.get(id);
+        if (!k || !keyBindingIsBound(k, account)) return;
+        const next = (Array.isArray(k.auth_bindings) ? k.auth_bindings : [])
+          .filter(b => bindingKey(b.provider, b.auth_id) !== wanted)
+          .map(b => ({ provider: b.provider, auth_id: b.auth_id }));
+        plans.push({ key: k, next, widens: next.length === 0, narrows: false });
+      });
+      if (plans.length === 0) { keyBindingResetDraft(); await loadKeyBindingData(); return; }
+
+      const narrowed = plans.filter(p => p.narrows).map(p => p.key.label || p.key.kid || p.key.id);
+      const widened = plans.filter(p => p.widens).map(p => p.key.label || p.key.kid || p.key.id);
+      const warnings = [];
+      if (narrowed.length) warnings.push('以下 Key 原本不限制账号，加入后将只能使用该账号：' + narrowed.join('、'));
+      if (widened.length) warnings.push('以下 Key 移除后将不再有任何绑定，恢复为可使用全部账号：' + widened.join('、'));
+      if (warnings.length && !window.confirm(warnings.join('\n\n'))) return;
+
+      let ok = 0;
+      const failures = [];
+      for (const plan of plans) {
+        try {
+          await api('POST', 'credit-manager/keys/update', { id: plan.key.id, auth_bindings: plan.next });
+          ok += 1;
+        } catch (e) {
+          failures.push((plan.key.label || plan.key.id) + '：' + (e && e.message ? e.message : e));
+        }
+      }
+      keyBindingResetDraft();
+      await loadKeyBindingData().catch(() => {});
+      if (failures.length === 0) flash('已更新 ' + ok + ' 个 Key 的绑定', true);
+      else flash('成功 ' + ok + '，失败 ' + failures.length + '：' + failures.join('；'), false);
+    } finally {
+      state.keyBindingSaving = false;
+      updateKeyBindingActions();
+    }
+  }
+
   function setTab(name) {
     const tab = name || 'overview';
     document.querySelectorAll('.tab').forEach(btn => {
@@ -1492,10 +1762,13 @@
 
   async function loadOverviewBundle() {
     const seq = state.tabLoadSeq;
+    const keyID = resolveKeyFilter($('overviewKeyFilter'));
     const data = await api('GET', 'credit-manager/overview' + overviewQuery());
     if (seq !== state.tabLoadSeq) return null;
-    state.overview = data;
     renderKeys(data.keys || []);
+    // Re-fetch if rebuilding the key choices cleared a deleted key filter.
+    if (keyID !== resolveKeyFilter($('overviewKeyFilter'))) return loadOverviewBundle();
+    state.overview = data;
     renderOverview(data);
     renderPricing(data.pricing || []);
     return data;
@@ -1768,6 +2041,7 @@
       return;
     }
     if (tab === 'oauth-tests') { await loadOAuthTestsState(); return; }
+    if (tab === 'key-binding') { await loadKeyBindingData(); return; }
     if (tab === 'auth-quotas') {
       loadSessionAffinitySettings().catch(() => {});
       loadAuthFallbackSettings().catch(() => {});
@@ -2700,13 +2974,18 @@
   }
 
   function setKeySearchSource(keys) {
-    const allKeys = [...(keys || [])].sort((left, right) => {
-      if (Boolean(left.revoked_at) !== Boolean(right.revoked_at)) return left.revoked_at ? 1 : -1;
+    const allKeys = (keys || []).filter(key => !key.revoked_at).sort((left, right) => {
       return String(right.created_at || '').localeCompare(String(left.created_at || ''));
     });
     state.allKeys = allKeys;
-    renderKeySearchOptions('usage');
-    renderKeySearchOptions('overview');
+    ['usage', 'overview'].forEach(kind => {
+      const input = $(kind + 'KeyFilter');
+      if (input && input.dataset.selectedKeyId && !allKeys.some(key => key.id === input.dataset.selectedKeyId)) {
+        input.value = '';
+        delete input.dataset.selectedKeyId;
+      }
+      renderKeySearchOptions(kind);
+    });
   }
 
   function renderKeys(keys, pagination, preserveSearchSource) {
@@ -2714,8 +2993,7 @@
       if (Boolean(left.revoked_at) !== Boolean(right.revoked_at)) return left.revoked_at ? 1 : -1;
       return String(right.created_at || '').localeCompare(String(left.created_at || ''));
     });
-    // Keep revoked keys available for historical usage filters, but hide them
-    // from the active Key management table.
+    // Hide revoked keys in the UI without deleting their accounting history.
     state.keys = allKeys.filter(key => !key.revoked_at);
     if (!preserveSearchSource || !state.allKeys.length) setKeySearchSource(allKeys);
     const pageData = pagination || {
@@ -6250,6 +6528,36 @@
     }
     setTab(btn.dataset.tab);
   }));
+  (function wireKeyBinding() {
+    const account = $('keyBindingAccount');
+    if (account) account.addEventListener('change', () => keyBindingChangeAccount(account.value));
+    const addBtn = $('btnKeyBindingAdd');
+    if (addBtn) addBtn.addEventListener('click', keyBindingMoveRight);
+    const removeBtn = $('btnKeyBindingRemove');
+    if (removeBtn) removeBtn.addEventListener('click', keyBindingMoveLeft);
+    const resetBtn = $('btnKeyBindingReset');
+    if (resetBtn) resetBtn.addEventListener('click', () => { keyBindingResetDraft(); renderKeyBinding(); });
+    const saveBtn = $('btnKeyBindingSave');
+    if (saveBtn) saveBtn.addEventListener('click', () => keyBindingSave().catch(e => flash(e.message, false)));
+    const leftFilter = $('keyBindingAvailableFilter');
+    if (leftFilter) leftFilter.addEventListener('input', renderKeyBinding);
+    const rightFilter = $('keyBindingSelectedFilter');
+    if (rightFilter) rightFilter.addEventListener('input', renderKeyBinding);
+    const bindList = (listId, checkedField) => {
+      const el = $(listId);
+      if (!el) return;
+      el.addEventListener('change', ev => {
+        const item = ev.target.closest('.key-binding-item');
+        if (!item) return;
+        const id = item.dataset.keyId;
+        const set = state[checkedField];
+        if (ev.target.checked) set.add(id); else set.delete(id);
+        renderKeyBinding();
+      });
+    };
+    bindList('keyBindingAvailableList', 'keyBindingLeftChecked');
+    bindList('keyBindingSelectedList', 'keyBindingRightChecked');
+  })();
   document.querySelectorAll('#tokenUnitSwitch [data-token-unit]').forEach(btn => {
     btn.addEventListener('click', () => setTokenUnit(btn.dataset.tokenUnit));
   });

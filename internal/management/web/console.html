@@ -311,6 +311,7 @@
         <button class="tab" data-tab="pricing"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 7.2V3.4a.9.9 0 0 1 .9-.9h3.8a1.6 1.6 0 0 1 1.1.5l5.2 5.2a1.6 1.6 0 0 1 0 2.3l-3.6 3.6a1.6 1.6 0 0 1-2.3 0L3 8.3a1.6 1.6 0 0 1-.5-1.1z"/><circle cx="5.7" cy="5.7" r=".9" fill="currentColor" stroke="none"/></svg>模型与价格</button>
         <button class="tab" data-tab="usage"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 13.5h11"/><path d="M4.2 13.2V8.4M7.6 13.2V4.2M11 13.2V6.4"/></svg>使用统计</button>
         <button class="tab" data-tab="auth-quotas"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.9 13 3.8v3.4c0 3.2-2 5.6-5 6.9-3-1.3-5-3.7-5-6.9V3.8z"/><path d="m5.9 7.8 1.5 1.5 2.7-3"/></svg>认证额度</button>
+        <button class="tab" data-tab="key-binding"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.2 9.8 9.8 6.2"/><path d="M7.3 4.6 8.4 3.5a2.4 2.4 0 0 1 3.4 3.4l-1.1 1.1"/><path d="M8.7 11.4 7.6 12.5a2.4 2.4 0 0 1-3.4-3.4l1.1-1.1"/></svg>Key 关联</button>
          <button class="tab" data-tab="oauth-tests">OAuth 测试</button>
       </div>
 
@@ -647,6 +648,44 @@
     </div>
     <div id="authQuotaList" class="auth-quota-list"></div>
     <div class="usage-pagination" id="authQuotaPagination"></div>
+  </section>
+
+  <section id="tab-key-binding" class="tabpane hidden">
+    <div class="page-intro">
+      <div><h2>按账号关联 API Key</h2><p>选择账号后，从左侧勾选 API Key 加入右侧；保存时逐个更新 Key 的绑定账号。未绑定任何账号的 Key 由宿主自由调度；一旦绑定，则只会使用其绑定的账号。</p></div>
+      <div class="actions">
+        <button class="btn ghost" id="btnKeyBindingReset" type="button" disabled><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.2 8A5.2 5.2 0 1 1 11.7 4.3M13.4 1.8v2.9h-2.9"/></svg>撤销变更</button>
+        <button class="btn primary" id="btnKeyBindingSave" type="button" disabled><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 2.5h7l3 3v8a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5v-10a.5.5 0 0 1 .5-.5z"/><path d="M5.5 2.5v4h5v-4M5.5 14v-4h5v4"/></svg>保存变更<span class="key-binding-save-count" id="keyBindingSaveCount" hidden></span></button>
+      </div>
+    </div>
+    <div class="key-binding-account-row">
+      <span class="key-binding-account-label">账号</span>
+      <select id="keyBindingAccount" class="key-binding-account-select"><option value="">请选择账号</option></select>
+      <span class="key-binding-account-hint" id="keyBindingAccountHint"></span>
+    </div>
+    <div class="key-binding-empty" id="keyBindingEmpty">请选择一个账号以查看并编辑其关联的 API Key。</div>
+    <div class="key-binding-panels hidden" id="keyBindingPanels">
+      <div class="card key-binding-panel" data-side="available">
+        <div class="section-heading key-binding-panel-head">
+          <div class="list-heading-title"><h2 class="panel-title">可选 API Key</h2><span class="list-count" id="keyBindingAvailableCount">已选 0 / 0</span></div>
+          <div class="list-search"><input id="keyBindingAvailableFilter" type="text" autocomplete="off" enterkeyhint="search" placeholder="搜索 标签 / kid / ID" aria-label="搜索可选 Key"/></div>
+        </div>
+        <div class="key-binding-list" id="keyBindingAvailableList"></div>
+        <div class="key-binding-panel-foot">
+          <button class="btn primary sm" id="btnKeyBindingAdd" type="button" disabled>添加<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9.5 4.5 13 8l-3.5 3.5"/></svg></button>
+        </div>
+      </div>
+      <div class="card key-binding-panel" data-side="selected">
+        <div class="section-heading key-binding-panel-head">
+          <div class="list-heading-title"><h2 class="panel-title">已关联 API Key</h2><span class="list-count" id="keyBindingSelectedCount">已选 0 / 0</span></div>
+          <div class="list-search"><input id="keyBindingSelectedFilter" type="text" autocomplete="off" enterkeyhint="search" placeholder="搜索 标签 / kid / ID" aria-label="搜索已关联 Key"/></div>
+        </div>
+        <div class="key-binding-list" id="keyBindingSelectedList"></div>
+        <div class="key-binding-panel-foot">
+          <button class="btn ghost sm" id="btnKeyBindingRemove" type="button" disabled><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 8H3M6.5 4.5 3 8l3.5 3.5"/></svg>移除</button>
+        </div>
+      </div>
+    </div>
   </section>
 
   <div class="modal-backdrop" id="resetSpendModal" aria-hidden="true">

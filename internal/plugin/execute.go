@@ -86,17 +86,20 @@ func execute(raw []byte) ([]byte, error) {
 	body = prepareCompatBody(req, body)
 	hostBody, headers, status, errHost := hostModelExecute(req.HostCallbackID, req.ExecutorRequest, body, false)
 	fallback := newAPIFallback(svc, key)
-	if errHost != nil && !isAuthConcurrencyError(errHost) {
-		hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "host_execute", errHost)
-		if fallback.take(ctx, &req, &body, errHost.Error()) {
-			hostBody, headers, status, errHost = hostModelExecute(req.HostCallbackID, req.ExecutorRequest, body, false)
+	for {
+		failure := ""
+		if errHost != nil && !isAuthConcurrencyError(errHost) {
+			hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "host_execute", errHost)
+			failure = errHost.Error()
+		} else if errHost == nil && isFallbackWorthyStatus(status) {
+			hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "upstream_status",
+				fmt.Errorf("upstream status %d: %s", status, truncateText(string(hostBody), 300)))
+			failure = fmt.Sprintf("upstream status %d", status)
 		}
-	} else if errHost == nil && isFallbackWorthyStatus(status) {
-		hostLogRequestFailure(req.HostCallbackID, req.Model, req.AuthProvider, "upstream_status",
-			fmt.Errorf("upstream status %d: %s", status, truncateText(string(hostBody), 300)))
-		if fallback.take(ctx, &req, &body, fmt.Sprintf("upstream status %d", status)) {
-			hostBody, headers, status, errHost = hostModelExecute(req.HostCallbackID, req.ExecutorRequest, body, false)
+		if !fallback.take(ctx, &req, &body, failure) {
+			break
 		}
+		hostBody, headers, status, errHost = hostModelExecute(req.HostCallbackID, req.ExecutorRequest, body, false)
 	}
 	completedAt := time.Now()
 	metrics := usageMetricsFromRequest(body, startedAt, completedAt, resultFromStatus(status))
@@ -207,8 +210,7 @@ func runStream(ctx context.Context, svc *service.Service, req rpcExecutorRequest
 	fallback := newAPIFallback(svc, key)
 	stripped := false
 	compactionDropped := false
-	// Bounded: the strip retry, the compaction drop and the API fallback each
-	// fire at most once.
+	// Bounded: strip/drop each fire once, and each fallback provider is tried once.
 	for {
 		stream, err := openUpstreamStream(req, body)
 		if err != nil {

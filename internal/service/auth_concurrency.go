@@ -16,6 +16,7 @@ import (
 type AuthPickCandidate struct {
 	ID       string
 	Provider string
+	Priority int
 	// Status is the host-visible lifecycle state (unknown, active, pending,
 	// refreshing, error, disabled).
 	Status string

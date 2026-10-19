@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -329,8 +330,10 @@ func (s *Service) pickFallbackAPIAuthLocked(limits map[string]int64, candidates 
 		return AuthPickCandidate{}, false
 	}
 	pool := make([]AuthPickCandidate, 0, len(candidates))
+	allowed := s.cfg.APIFallback.ProviderKeys()
 	for _, candidate := range candidates {
-		if !authProviderIsAPI(authLimitProvider(candidate.Provider)) {
+		provider := authLimitProvider(candidate.Provider)
+		if !authProviderIsAPI(provider) || (len(s.cfg.APIFallback.Providers) > 0 && !slices.Contains(allowed, provider)) {
 			continue
 		}
 		if strings.TrimSpace(candidate.ID) == "" || authStatusDisabled(candidate.Status) {
@@ -347,7 +350,22 @@ func (s *Service) pickFallbackAPIAuthLocked(limits map[string]int64, candidates 
 	if len(available) == 0 {
 		return AuthPickCandidate{}, false
 	}
-	return s.nextAuthPickLocked(authPickScopeFallback, available), true
+	if len(s.cfg.APIFallback.Providers) == 0 {
+		return s.nextAuthPickLocked(authPickScopeFallback, available), true
+	}
+	priority := available[0].Priority
+	for _, candidate := range available[1:] {
+		if candidate.Priority > priority {
+			priority = candidate.Priority
+		}
+	}
+	pool = pool[:0]
+	for _, candidate := range available {
+		if candidate.Priority == priority {
+			pool = append(pool, candidate)
+		}
+	}
+	return s.nextAuthPickLocked(authPickScopeFallback, pool), true
 }
 
 // noBoundAuthError keeps the fail-closed sentinel but appends what the plugin

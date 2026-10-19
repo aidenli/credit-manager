@@ -172,6 +172,31 @@ func TestRotateKeyKeepsAuthBindings(t *testing.T) {
 	}
 }
 
+// The account-centric "Key 关联" tab batch-binds keys to one account by reusing
+// the per-key keys/update endpoint; it must ship its tab button, panes, and the
+// JS entry points that load, render and save the draft.
+func TestConsoleKeyBindingTab(t *testing.T) {
+	page := strings.ReplaceAll(string(consolePage().Body), "\r\n", "\n")
+	for _, text := range []string{
+		`data-tab="key-binding"`,
+		`id="tab-key-binding"`,
+		`id="keyBindingAccount"`,
+		`id="keyBindingAvailableList"`,
+		`id="keyBindingSelectedList"`,
+		`id="btnKeyBindingSave"`,
+		`id="btnKeyBindingReset"`,
+		"function loadKeyBindingData",
+		"function renderKeyBinding",
+		"function keyBindingSave",
+		"credit-manager/keys/update",
+		"credit-manager/keys?page=",
+	} {
+		if !strings.Contains(page, text) {
+			t.Fatalf("key binding tab is missing: %q", text)
+		}
+	}
+}
+
 func TestConsoleKeyAuthBindingControls(t *testing.T) {
 	page := strings.ReplaceAll(string(consolePage().Body), "\r\n", "\n")
 	for _, text := range []string{
