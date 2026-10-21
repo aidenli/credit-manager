@@ -76,6 +76,21 @@ func TestHostAPIFallbackOrder(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(order, []string{deepseekProvider}) {
 		t.Fatalf("original API must not be retried: %v, %v", order, err)
 	}
+	// Config-defined API providers are absent from host.auth.list: keep config order.
+	files = []pluginapi.HostAuthFileEntry{{Provider: "codex", Priority: 2}}
+	order, err = hostAPIFallbackOrder(allowed, "codex")
+	if err != nil || !reflect.DeepEqual(order, []string{deepseekProvider, magpieProvider}) {
+		t.Fatalf("unlisted allowlisted providers: %v, %v", order, err)
+	}
+	order, _ = hostAPIFallbackOrder(allowed, magpieProvider)
+	if !reflect.DeepEqual(order, []string{deepseekProvider}) {
+		t.Fatalf("unlisted current provider must not be retried: %v", order)
+	}
+	files = []pluginapi.HostAuthFileEntry{{Provider: deepseekProvider, Disabled: true}}
+	order, _ = hostAPIFallbackOrder(allowed, "codex")
+	if !reflect.DeepEqual(order, []string{magpieProvider}) {
+		t.Fatalf("listed-disabled provider must stay excluded: %v", order)
+	}
 	files = []pluginapi.HostAuthFileEntry{
 		{Provider: magpieProvider}, {Provider: deepseekProvider},
 	}

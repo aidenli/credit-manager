@@ -142,6 +142,7 @@ func TestFallbackWorthyFailure(t *testing.T) {
 		"upstream stream status 429",
 		"upstream status 502",
 		"thinking_signature_invalid",
+		`host_call_failed: Post "https://chatgpt.com/backend-api/codex/responses": utls: dial upstream: socks connect tcp 104.202.107.214:6023->chatgpt.com:443: dial tcp 104.202.107.214:6023: connect: connection refused`,
 	} {
 		if !isFallbackWorthyFailure(text) {
 			t.Errorf("%q should fall back", text)

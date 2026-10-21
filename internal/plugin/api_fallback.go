@@ -99,6 +99,13 @@ func hostAPIFallbackOrder(allowed []string, current string) ([]string, error) {
 		return nil, err
 	}
 	priorities := make(map[string]int)
+	excluded := map[string]bool{current: true}
+	for _, entry := range response.Files {
+		provider := strings.ToLower(strings.TrimSpace(entry.Provider))
+		if entry.Disabled || strings.EqualFold(strings.TrimSpace(entry.Status), "disabled") {
+			excluded[provider] = true
+		}
+	}
 	for _, entry := range response.Files {
 		provider := strings.ToLower(strings.TrimSpace(entry.Provider))
 		if provider == current || entry.Disabled || strings.EqualFold(strings.TrimSpace(entry.Status), "disabled") ||
@@ -129,6 +136,13 @@ func hostAPIFallbackOrder(allowed []string, current string) ([]string, error) {
 		offset := int(cursor % uint64(len(tier)))
 		copy(providers[start:end], append(tier[offset:], tier[:offset]...))
 		start = end
+	}
+	// CPA omits config-defined API providers from host.auth.list (no file path),
+	// so allowlisted providers it does not report are tried after, in config order.
+	for _, provider := range allowed {
+		if _, listed := priorities[provider]; !listed && !excluded[provider] {
+			providers = append(providers, provider)
+		}
 	}
 	return providers, nil
 }
@@ -175,6 +189,9 @@ var fallbackWorthyMarkers = []string{
 	"internal_server_error", "internal server error", "bad gateway", "gateway timeout",
 	"timeout", "timed out", "temporarily", "try again later",
 	"auth_unavailable", "no auth available", "currently unavailable", "cooling",
+	// Proxy/network failures before any output: another provider can answer.
+	"connection refused", "connection reset", "dial tcp", "socks connect", "proxyconnect",
+	"no route to host", "network is unreachable", "unexpected eof",
 	stripEncryptedRetryText, "could not be verified",
 }
 
