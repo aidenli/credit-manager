@@ -4940,11 +4940,11 @@
       return '<td class="usage-key" title="'+esc(title)+'"><div class="usage-key-label"><span class="badge fallback">'+esc(t('兜底'))+'</span><strong>'+esc(servedText)+'</strong>'+(served ? '<div class="mono">'+esc(display)+'</div>' : '')+'</div></td>';
     };
 
-    $('usageRecent').innerHTML = items.length ? '<div class="table-scroll"><table class="usage-table"><thead><tr><th>时间</th><th>账号</th><th>模型名称</th><th>来源</th><th>执行器</th><th>结果</th><th>首字延迟</th><th>生成时间</th><th>TPS</th><th>思考强度</th><th>输入</th><th>输出</th><th>思考</th><th>缓存读取</th><th>缓存创建</th><th>总 Token 数</th><th>缓存命中</th><th>费用 '+esc(currencyCode())+'</th></tr></thead><tbody>' +
+    $('usageRecent').innerHTML = items.length ? '<div class="table-scroll"><table class="usage-table"><thead><tr><th>时间</th><th>账号</th><th>API Key 名称</th><th>模型名称</th><th>来源</th><th>执行器</th><th>结果</th><th>首字延迟</th><th>生成时间</th><th>TPS</th><th>思考强度</th><th>输入</th><th>输出</th><th>思考</th><th>缓存读取</th><th>缓存创建</th><th>总 Token 数</th><th>缓存命中</th><th>费用 '+esc(currencyCode())+'</th></tr></thead><tbody>' +
       items.map(u => {
         const settledCost = u.cost_micro_usd;
         const cell = (value) => '<td title="'+esc(tokenTitle(value))+'">'+esc(formatTokens(value))+'</td>';
-        return '<tr><td class="mono" title="'+esc(u.created_at)+'">'+esc(formatDateTime(u.created_at))+'</td>'+usageAuthCell(u)+
+        return '<tr><td class="mono" title="'+esc(u.created_at)+'">'+esc(formatDateTime(u.created_at))+'</td>'+usageAuthCell(u)+'<td>'+esc(u.key_label || u.plugin_key_id || '—')+'</td>'+
           '<td class="mono model" title="'+esc(u.model)+'">'+esc(u.model)+'</td><td>'+esc(u.source || '—')+'</td><td class="mono">'+esc(u.executor_type || '—')+'</td><td>'+esc(u.result || '—')+'</td><td>'+esc(formatMilliseconds(u.first_token_latency_ms))+'</td><td>'+esc(formatMilliseconds(u.generation_duration_ms))+'</td><td>'+esc(formatTPS(u.tokens_per_second))+'</td><td>'+esc(u.thinking_intensity || '—')+'</td>'+
           cell(u.input_tokens || 0)+cell(u.output_tokens || 0)+cell(u.reasoning_tokens || 0)+cell(u.cache_read_tokens || 0)+cell(u.cache_creation_tokens || 0)+cell(totalUsageTokens(u))+
           '<td>'+esc(cacheHit(u))+'</td><td title="'+esc(moneyTitle(settledCost))+'">'+esc(formatMoney(settledCost))+'</td></tr>';

@@ -36,6 +36,7 @@ type registration struct {
 type registrationCapability struct {
 	FrontendAuthProvider          bool     `json:"frontend_auth_provider"`
 	FrontendAuthProviderExclusive bool     `json:"frontend_auth_provider_exclusive"`
+	FrontendAuthProviderOmitBody  bool     `json:"frontend_auth_provider_omit_body,omitempty"`
 	ModelRouter                   bool     `json:"model_router"`
 	Executor                      bool     `json:"executor"`
 	ExecutorModelScope            string   `json:"executor_model_scope"`

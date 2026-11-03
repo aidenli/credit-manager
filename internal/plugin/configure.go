@@ -52,6 +52,7 @@ func pluginRegistration(schemaVersion uint32) registration {
 		Capabilities: registrationCapability{
 			FrontendAuthProvider:          true,
 			FrontendAuthProviderExclusive: true,
+			FrontendAuthProviderOmitBody:  schemaVersion >= supportedRPCSchemaVersion,
 			ModelRouter:                   true,
 			Executor:                      true,
 			ExecutorModelScope:            string(pluginapi.ExecutorModelScopeBoth),

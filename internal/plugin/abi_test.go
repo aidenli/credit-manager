@@ -16,9 +16,8 @@ func TestPluginABIKeepsManagementResponsesRaw(t *testing.T) {
 		t.Fatalf("pluginabi.SchemaVersion = %d, but the host escapes management JSON below %d",
 			pluginabi.SchemaVersion, pluginabi.SchemaVersionRawManagementResponse)
 	}
-	// The host negotiates the smaller of the two schema versions, so a host older
-	// than this SDK still escapes. The plugin must never be the reason.
-	if got := negotiateRPCSchema(pluginabi.SchemaVersion + 10); got != pluginabi.SchemaVersion {
-		t.Fatalf("negotiated schema = %d, want %d", got, pluginabi.SchemaVersion)
+	// The RPC contract is extended locally without upgrading the SDK.
+	if got := negotiateRPCSchema(10); got < pluginabi.SchemaVersionRawManagementResponse {
+		t.Fatalf("negotiated schema = %d, want at least %d", got, pluginabi.SchemaVersionRawManagementResponse)
 	}
 }

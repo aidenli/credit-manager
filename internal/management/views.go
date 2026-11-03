@@ -179,6 +179,7 @@ func usageView(entry store.UsageEntry) map[string]any {
 	return map[string]any{
 		"id":                       entry.ID,
 		"plugin_key_id":            entry.PluginKeyID,
+		"key_label":                entry.KeyLabel,
 		"auth_id":                  entry.Auth.AuthID,
 		"auth_index":               entry.Auth.AuthIndex,
 		"auth_name":                entry.Auth.Name,

@@ -23,6 +23,7 @@ type UsageMetrics struct {
 }
 
 type UsageEntry struct {
+	KeyLabel              string
 	ID                    string
 	ReservationID         string
 	CallerID              string
@@ -348,8 +349,8 @@ func (s *Store) ListUsage(ctx context.Context, filter UsageFilter) ([]UsageEntry
 		COALESCE(u.auth_id, ''), COALESCE(u.auth_index, ''), COALESCE(u.auth_name, ''), COALESCE(u.auth_label, ''),
 		COALESCE(u.auth_provider, ''), COALESCE(u.auth_type, ''), COALESCE(u.auth_email, ''), COALESCE(u.auth_path, ''),
 		u.served_api, COALESCE(u.served_provider, ''),
-		u.created_at_unix_ms
-		FROM usage_ledger u`
+		u.created_at_unix_ms, COALESCE(k.label, '')
+		FROM usage_ledger u LEFT JOIN plugin_keys k ON k.id = u.plugin_key_id`
 	where, args := usageWhere(filter, "u")
 	if where != "" {
 		query += ` WHERE ` + where
@@ -377,7 +378,7 @@ func (s *Store) ListUsage(ctx context.Context, filter UsageFilter) ([]UsageEntry
 			&entry.Auth.AuthID, &entry.Auth.AuthIndex, &entry.Auth.Name, &entry.Auth.Label,
 			&entry.Auth.Provider, &entry.Auth.Type, &entry.Auth.Email, &entry.Auth.Path,
 			&servedAPI, &entry.ServedProvider,
-			&created); err != nil {
+			&created, &entry.KeyLabel); err != nil {
 			return nil, err
 		}
 		entry.ServedAPI = servedAPI != 0

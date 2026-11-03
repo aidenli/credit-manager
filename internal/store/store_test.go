@@ -1089,7 +1089,7 @@ func TestListUsageAllowsNullEstimatedCost(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
 	defer st.Close()
-	key := newTestKey(t, ctx, st, PluginKeySpec{QuotaMicroUSD: 10_000})
+	key := newTestKey(t, ctx, st, PluginKeySpec{QuotaMicroUSD: 10_000, Label: "API key name"})
 	at := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
 	if _, err := st.db.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
 		t.Fatalf("disable foreign keys: %v", err)
@@ -1102,8 +1102,15 @@ func TestListUsageAllowsNullEstimatedCost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list usage: %v", err)
 	}
-	if len(got) != 1 || got[0].CostMicroUSD != 1500 || got[0].EstimatedCostMicroUSD != 1500 {
+	if len(got) != 1 || got[0].CostMicroUSD != 1500 || got[0].EstimatedCostMicroUSD != 1500 || got[0].KeyLabel != "API key name" {
 		t.Fatalf("usage = %#v", got)
+	}
+	if _, err := st.db.ExecContext(ctx, `UPDATE usage_ledger SET plugin_key_id = 'missing-key' WHERE id = 'u-null-est'`); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.ListUsage(ctx, UsageFilter{Limit: 10})
+	if err != nil || len(got) != 1 || got[0].KeyLabel != "" {
+		t.Fatalf("usage with missing key = %#v, err = %v", got, err)
 	}
 }
 

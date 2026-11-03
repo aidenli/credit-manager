@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 )
 
 func decodeLifecycle(raw []byte) (lifecycleRequest, error) {
@@ -45,12 +43,12 @@ func decodeLifecycleConfigYAML(raw json.RawMessage) ([]byte, error) {
 	return nil, fmt.Errorf("config_yaml must be a base64/plain string or byte array")
 }
 
+// Schema 7 only adds opt-in body omission; keep SDK v7.3.4 and advertise no newer contracts.
+const supportedRPCSchemaVersion uint32 = 7
+
 func negotiateRPCSchema(hostSchema uint32) uint32 {
 	if hostSchema == 0 {
 		return 1
 	}
-	if hostSchema < pluginabi.SchemaVersion {
-		return hostSchema
-	}
-	return pluginabi.SchemaVersion
+	return min(hostSchema, supportedRPCSchemaVersion)
 }

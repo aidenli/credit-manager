@@ -2,9 +2,8 @@ package plugin
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
-
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 )
 
 func TestDecodeLifecycleAcceptsConfigYAMLRepresentations(t *testing.T) {
@@ -53,13 +52,50 @@ func TestDecodeLifecycleAcceptsConfigYAMLRepresentations(t *testing.T) {
 }
 
 func TestNegotiateRPCSchemaCapsAtSupportedVersion(t *testing.T) {
-	if got := negotiateRPCSchema(0); got != 1 {
-		t.Fatalf("empty host schema = %d, want 1", got)
-	}
-	if got := negotiateRPCSchema(2); got != 2 {
-		t.Fatalf("older host schema = %d, want 2", got)
-	}
-	if got := negotiateRPCSchema(pluginabi.SchemaVersion + 4); got != pluginabi.SchemaVersion {
-		t.Fatalf("newer host schema = %d, want %d", got, pluginabi.SchemaVersion)
+	for _, tc := range []struct {
+		host, want uint32
+	}{
+		{0, 1}, {1, 1}, {2, 2}, {6, 6}, {7, 7}, {10, 7},
+	} {
+		t.Run(fmt.Sprint(tc.host), func(t *testing.T) {
+			if got := negotiateRPCSchema(tc.host); got != tc.want {
+				t.Fatalf("negotiated schema = %d, want %d", got, tc.want)
+			}
+			raw, err := okEnvelope(pluginRegistration(negotiateRPCSchema(tc.host)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire struct {
+				OK     bool `json:"ok"`
+				Result struct {
+					SchemaVersion uint32                     `json:"schema_version"`
+					Capabilities  map[string]json.RawMessage `json:"capabilities"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal(raw, &wire); err != nil {
+				t.Fatal(err)
+			}
+			if !wire.OK || wire.Result.SchemaVersion != tc.want {
+				t.Fatalf("registration = %s", raw)
+			}
+			caps := wire.Result.Capabilities
+			wantFlag := ""
+			if tc.want >= 7 {
+				wantFlag = "true"
+			}
+			if got := string(caps["frontend_auth_provider_omit_body"]); got != wantFlag {
+				t.Fatalf("omit body flag = %q, want %q", got, wantFlag)
+			}
+			for _, name := range []string{"frontend_auth_provider", "frontend_auth_provider_exclusive", "request_interceptor", "request_lifecycle_plugin"} {
+				if string(caps[name]) != "true" {
+					t.Fatalf("capability %s = %s, want true", name, caps[name])
+				}
+			}
+			for _, name := range []string{"request_interceptor_omit_body_before", "request_interceptor_omit_body_after"} {
+				if _, exists := caps[name]; exists {
+					t.Fatalf("unexpected interceptor body opt-out: %s", name)
+				}
+			}
+		})
 	}
 }
