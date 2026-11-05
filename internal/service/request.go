@@ -41,51 +41,67 @@ func estimateTokens(body []byte, defaultOutput, maxTotal int64) (input, output i
 	return input, output
 }
 
+// requestFields holds the few top-level members the reserve plan reads. Decoding
+// into it skips the rest (the multi-MB input history) instead of building a map.
+// Fields stay `any` so a mistyped member is ignored like the old map lookup did.
+type requestFields struct {
+	Model               any `json:"model"`
+	ServiceTier         any `json:"service_tier"`
+	Tier                any `json:"tier"`
+	MaxTokens           any `json:"max_tokens"`
+	MaxOutputTokens     any `json:"max_output_tokens"`
+	MaxCompletionTokens any `json:"max_completion_tokens"`
+	GenerationConfig    any `json:"generationConfig"`
+	N                   any `json:"n"`
+	NImages             any `json:"n_images"`
+	NumImages           any `json:"num_images"`
+	ImageCount          any `json:"image_count"`
+}
+
+func decodeRequestFields(body []byte) (requestFields, bool) {
+	var root requestFields
+	if err := json.Unmarshal(body, &root); err != nil {
+		return root, false
+	}
+	return root, true
+}
+
 func extractModel(body []byte) string {
-	return extractString(body, "model")
+	root, ok := decodeRequestFields(body)
+	if !ok {
+		return ""
+	}
+	return firstTrimmedString(root.Model)
 }
 
 func extractServiceTier(body []byte) string {
-	return extractString(body, "service_tier", "tier")
-}
-
-func extractString(body []byte, keys ...string) string {
-	var root map[string]any
-	if err := json.Unmarshal(body, &root); err != nil {
+	root, ok := decodeRequestFields(body)
+	if !ok {
 		return ""
 	}
-	for _, key := range keys {
-		if value, ok := root[key].(string); ok && strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
+	return firstTrimmedString(root.ServiceTier, root.Tier)
+}
+
+func firstTrimmedString(values ...any) string {
+	for _, value := range values {
+		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+			return strings.TrimSpace(text)
 		}
 	}
 	return ""
 }
 
 func extractOutputLimit(body []byte) int64 {
-	var root map[string]any
-	if err := json.Unmarshal(body, &root); err != nil {
+	root, ok := decodeRequestFields(body)
+	if !ok {
 		return 0
 	}
-	for _, key := range []string{"max_tokens", "max_output_tokens", "max_completion_tokens"} {
-		if value, ok := root[key]; ok {
-			switch typed := value.(type) {
-			case float64:
-				if typed > 0 {
-					return int64(typed)
-				}
-			case int64:
-				if typed > 0 {
-					return typed
-				}
-			case int:
-				if typed > 0 {
-					return int64(typed)
-				}
-			}
+	for _, value := range []any{root.MaxTokens, root.MaxOutputTokens, root.MaxCompletionTokens} {
+		if typed, ok := value.(float64); ok && typed > 0 {
+			return int64(typed)
 		}
 	}
-	if gen, ok := root["generationConfig"].(map[string]any); ok {
+	if gen, ok := root.GenerationConfig.(map[string]any); ok {
 		if value, ok := gen["maxOutputTokens"].(float64); ok && value > 0 {
 			return int64(value)
 		}
@@ -98,18 +114,16 @@ func extractImageCount(body []byte) int64 {
 	if len(body) == 0 {
 		return 1
 	}
-	var root map[string]any
-	if err := json.Unmarshal(body, &root); err != nil {
+	root, ok := decodeRequestFields(body)
+	if !ok {
 		return 1
 	}
-	for _, key := range []string{"n", "n_images", "num_images", "image_count"} {
-		if value, ok := root[key]; ok {
-			if count := positiveInt64(value); count > 0 {
-				if count > maxImages {
-					return maxImages
-				}
-				return count
+	for _, value := range []any{root.N, root.NImages, root.NumImages, root.ImageCount} {
+		if count := positiveInt64(value); count > 0 {
+			if count > maxImages {
+				return maxImages
 			}
+			return count
 		}
 	}
 	return 1

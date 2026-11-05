@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -179,6 +180,10 @@ func requestBody(req pluginapi.ExecutorRequest) []byte {
 // stream_options.include_usage with HTTP 400. Usage for those streams arrives
 // on response.completed without this flag.
 func requestBodyWithStreamUsage(body []byte, sourceFormat, outputFormat string) []byte {
+	// Responses/codex bodies only ever lose include_usage; skip the full parse when it is absent.
+	if !supportsChatCompletionsStreamUsage(sourceFormat, outputFormat) && !bytes.Contains(body, []byte(`"include_usage"`)) {
+		return body
+	}
 	var payload map[string]any
 	if len(body) == 0 || json.Unmarshal(body, &payload) != nil {
 		return body
