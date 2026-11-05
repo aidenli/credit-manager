@@ -86,17 +86,14 @@ func TestNegotiateRPCSchemaCapsAtSupportedVersion(t *testing.T) {
 			if got := string(caps["frontend_auth_provider_omit_body"]); got != wantFlag {
 				t.Fatalf("omit body flag = %q, want %q", got, wantFlag)
 			}
-			if got := string(caps["request_interceptor_omit_body_after"]); got != wantFlag {
-				t.Fatalf("interceptor after omit body flag = %q, want %q", got, wantFlag)
+			for _, name := range []string{"request_interceptor_omit_body_before", "request_interceptor_omit_body_after"} {
+				if got := string(caps[name]); got != wantFlag {
+					t.Fatalf("%s = %q, want %q", name, got, wantFlag)
+				}
 			}
 			for _, name := range []string{"frontend_auth_provider", "frontend_auth_provider_exclusive", "request_interceptor", "request_lifecycle_plugin"} {
 				if string(caps[name]) != "true" {
 					t.Fatalf("capability %s = %s, want true", name, caps[name])
-				}
-			}
-			for _, name := range []string{"request_interceptor_omit_body_before"} {
-				if _, exists := caps[name]; exists {
-					t.Fatalf("unexpected interceptor body opt-out: %s", name)
 				}
 			}
 		})

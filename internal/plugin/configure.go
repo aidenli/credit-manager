@@ -62,10 +62,11 @@ func pluginRegistration(schemaVersion uint32) registration {
 			ManagementAPI:                 true,
 			RequestInterceptor:            true,
 			// shortcut: image reservations now see an empty body, so they bill as 1 image (extractImageCount default).
-			RequestInterceptorOmitBodyAfter: schemaVersion >= supportedRPCSchemaVersion,
-			RequestLifecyclePlugin:          true,
-			ResponseInterceptor:             true,
-			Scheduler:                       true,
+			RequestInterceptorOmitBodyAfter:  schemaVersion >= supportedRPCSchemaVersion,
+			RequestInterceptorOmitBodyBefore: schemaVersion >= supportedRPCSchemaVersion,
+			RequestLifecyclePlugin:           true,
+			ResponseInterceptor:              true,
+			Scheduler:                        true,
 		},
 	}
 }

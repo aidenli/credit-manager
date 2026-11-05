@@ -45,11 +45,12 @@ type registrationCapability struct {
 	UsagePlugin                   bool     `json:"usage_plugin"`
 	ManagementAPI                 bool     `json:"management_api"`
 	RequestInterceptor            bool     `json:"request_interceptor"`
-	// Only the after-auth hook reads data; it needs headers/metadata, not the body.
-	RequestInterceptorOmitBodyAfter bool `json:"request_interceptor_omit_body_after,omitempty"`
-	RequestLifecyclePlugin          bool `json:"request_lifecycle_plugin"`
-	ResponseInterceptor             bool `json:"response_interceptor"`
-	Scheduler                       bool `json:"scheduler"`
+	// Interceptors need headers/metadata only; before-auth reads nothing at all.
+	RequestInterceptorOmitBodyBefore bool `json:"request_interceptor_omit_body_before,omitempty"`
+	RequestInterceptorOmitBodyAfter  bool `json:"request_interceptor_omit_body_after,omitempty"`
+	RequestLifecyclePlugin           bool `json:"request_lifecycle_plugin"`
+	ResponseInterceptor              bool `json:"response_interceptor"`
+	Scheduler                        bool `json:"scheduler"`
 }
 
 type rpcModelRouteRequest struct {
