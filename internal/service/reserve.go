@@ -160,6 +160,22 @@ func (s *Service) cleanupStaleReservations(ctx context.Context, force bool) (int
 	return released, nil
 }
 
+// releaseAllHeldOnStartup frees every hold left by a previous process. The
+// store is opened under an exclusive lock, so no request from that process can
+// still settle its hold; waiting for the stale timeout would only keep keys
+// blocked by their concurrency limit after a crash or OOM restart.
+func (s *Service) releaseAllHeldOnStartup(ctx context.Context) (int64, error) {
+	s.cleanupMu.Lock()
+	defer s.cleanupMu.Unlock()
+	now := time.Now().UTC()
+	released, err := s.store.ReleaseStaleReservations(ctx, now.Add(time.Millisecond))
+	if err != nil {
+		return 0, err
+	}
+	s.lastCleanup = now
+	return released, nil
+}
+
 func (s *Service) TouchReservation(ctx context.Context, reservationID string) error {
 	return s.store.TouchReservation(ctx, reservationID)
 }

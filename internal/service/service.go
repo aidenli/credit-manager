@@ -127,7 +127,7 @@ func Open(ctx context.Context, cfg config.Config) (*Service, error) {
 		_ = svc.Close()
 		return nil, err
 	}
-	if _, err := svc.cleanupStaleReservations(ctx, true); err != nil {
+	if _, err := svc.releaseAllHeldOnStartup(ctx); err != nil {
 		_ = svc.Close()
 		return nil, fmt.Errorf("release stale reservations: %w", err)
 	}
@@ -244,7 +244,7 @@ func Configure(ctx context.Context, rawYAML []byte) error {
 		_ = svc.Close()
 		return err
 	}
-	if _, err := svc.cleanupStaleReservations(ctx, true); err != nil {
+	if _, err := svc.releaseAllHeldOnStartup(ctx); err != nil {
 		_ = svc.Close()
 		return fmt.Errorf("release stale reservations: %w", err)
 	}

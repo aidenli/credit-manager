@@ -866,3 +866,55 @@ func openTestService(t *testing.T) *Service {
 	}
 	return svc
 }
+
+func TestOpenReleasesAllHeldReservationsFromPreviousProcess(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("CREDIT_MANAGER_TEST_PEPPERS", "active:0123456789abcdef0123456789abcdef")
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.Keys.PepperEnv = "CREDIT_MANAGER_TEST_PEPPERS"
+	cfg.Keys.ActivePepperID = "active"
+	svc, err := Open(ctx, cfg)
+	if err != nil {
+		t.Fatalf("open service: %v", err)
+	}
+	if err := svc.Store().PutPricingRule(ctx, store.PricingRule{
+		ID: "all", MatchKind: store.MatchGlob, Pattern: "*", Priority: 1, Enabled: true,
+		Price: money.PricePerMTok{Input: 1_000_000, Output: 3_000_000},
+	}); err != nil {
+		t.Fatalf("put pricing: %v", err)
+	}
+	key, _, err := svc.MintKey(ctx, BootstrapCallerID, "test", 10_000_000, nil)
+	if err != nil {
+		t.Fatalf("mint key: %v", err)
+	}
+	plan, err := svc.BuildReservePlan(ctx, "gpt-test", []byte(`{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+	reservation, err := svc.Reserve(ctx, key, plan, "fresh-hold")
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	_ = svc.Close()
+
+	reopened, err := Open(ctx, cfg)
+	if err != nil {
+		t.Fatalf("reopen service: %v", err)
+	}
+	defer reopened.Close()
+	got, err := reopened.Store().GetReservation(ctx, reservation.ID)
+	if err != nil {
+		t.Fatalf("get reservation: %v", err)
+	}
+	if got.Status != store.ReservationReleased {
+		t.Fatalf("reservation status = %s, want released on startup", got.Status)
+	}
+	updatedKey, err := reopened.Store().GetPluginKey(ctx, key.ID)
+	if err != nil {
+		t.Fatalf("get key: %v", err)
+	}
+	if updatedKey.HeldAmountMicroUSD != 0 {
+		t.Fatalf("held amount = %d, want 0", updatedKey.HeldAmountMicroUSD)
+	}
+}
