@@ -71,13 +71,13 @@ func execute(raw []byte) ([]byte, error) {
 		if errors.Is(err, store.ErrModelNotAllowed) {
 			return errorEnvelope("model_not_allowed", err.Error()), nil
 		}
-		return limitRejectEnvelope(err), nil
+		return errorEnvelope("limit_rejected", err.Error()), nil
 	}
 	svc.TrackAuthCaptureWithAuth(reservation.ID, auth, plan.Model, req.Model)
 	defer func() { _ = svc.FinishExecution(ctx, reservation.ID) }()
 	if err := admitExecutorAuth(ctx, svc, reservation.ID, auth); err != nil {
 		_ = svc.Release(ctx, reservation.ID, "auth_concurrency:"+err.Error())
-		return limitRejectEnvelope(err), nil
+		return errorEnvelope("limit_rejected", err.Error()), nil
 	}
 	stopHeartbeat := startReservationHeartbeat(svc, reservation.ID)
 	defer stopHeartbeat()
@@ -151,7 +151,7 @@ func executeStream(raw []byte) ([]byte, error) {
 			}
 		}()
 		if err := runStream(context.Background(), svc, req, streamID, lifecycleID); err != nil {
-			closePluginStreamErr(streamID, err)
+			closePluginStream(streamID, err.Error())
 			return
 		}
 		closePluginStream(streamID, "")
@@ -675,14 +675,6 @@ func emitPluginStreamChunk(streamID string, payload []byte) error {
 
 func closePluginStream(streamID, errMsg string) {
 	_, _ = callHost(pluginabi.MethodHostStreamClose, rpcStreamCloseRequest{StreamID: streamID, Error: strings.TrimSpace(errMsg)})
-}
-
-func closePluginStreamErr(streamID string, err error) {
-	req := rpcStreamCloseRequest{StreamID: streamID, Error: strings.TrimSpace(err.Error())}
-	if status := limitRejectStatus(err); status != 0 {
-		req.ErrorDetail = &envelopeError{Code: "limit_rejected", Message: req.Error, HTTPStatus: status}
-	}
-	_, _ = callHost(pluginabi.MethodHostStreamClose, req)
 }
 
 func closeHostModelStream(streamID string) error {

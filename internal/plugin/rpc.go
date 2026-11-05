@@ -3,7 +3,6 @@ package plugin
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 
 	"github.com/yuluo688/credit-manager/internal/management"
 	"github.com/yuluo688/credit-manager/internal/service"
@@ -19,9 +18,8 @@ type envelope struct {
 }
 
 type envelopeError struct {
-	Code       string `json:"code"`
-	Message    string `json:"message"`
-	HTTPStatus int    `json:"http_status,omitempty"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 type lifecycleRequest struct {
@@ -77,9 +75,8 @@ type rpcStreamEmitRequest struct {
 }
 
 type rpcStreamCloseRequest struct {
-	StreamID    string         `json:"stream_id"`
-	Error       string         `json:"error,omitempty"`
-	ErrorDetail *envelopeError `json:"error_detail,omitempty"`
+	StreamID string `json:"stream_id"`
+	Error    string `json:"error,omitempty"`
 }
 
 func HandleMethod(method string, request []byte) ([]byte, error) {
@@ -155,20 +152,6 @@ func okEnvelope(v any) ([]byte, error) {
 func errorEnvelope(code, message string) []byte {
 	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: code, Message: message}})
 	return raw
-}
-
-// limitRejectEnvelope surfaces key/auth concurrency rejections as 429 so clients
-// back off instead of treating them as server faults (host defaults to 500).
-func limitRejectEnvelope(err error) []byte {
-	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: "limit_rejected", Message: err.Error(), HTTPStatus: limitRejectStatus(err)}})
-	return raw
-}
-
-func limitRejectStatus(err error) int {
-	if isAuthConcurrencyError(err) {
-		return http.StatusTooManyRequests
-	}
-	return 0
 }
 
 func ErrorEnvelope(code, message string) []byte {
