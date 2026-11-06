@@ -27,7 +27,11 @@ func pluginRegistration(schemaVersion uint32) registration {
 		"openai", "chat-completions", "claude", "gemini", "openai-response", "responses", "codex",
 		"openai-image", "openai-video",
 	}
-	return registration{
+	authOnly := false
+	if svc := service.Current(); svc != nil {
+		authOnly = svc.Config().AuthOnly
+	}
+	reg := registration{
 		SchemaVersion: schemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             service.PluginName,
@@ -69,4 +73,14 @@ func pluginRegistration(schemaVersion uint32) registration {
 			Scheduler:                        true,
 		},
 	}
+	if authOnly {
+		// Executor and model router are the two hooks that receive full request
+		// bodies; dropping them leaves the host to execute natively.
+		reg.Capabilities.ModelRouter = false
+		reg.Capabilities.Executor = false
+		reg.Capabilities.ExecutorModelScope = ""
+		reg.Capabilities.ExecutorInputFormats = nil
+		reg.Capabilities.ExecutorOutputFormats = nil
+	}
+	return reg
 }

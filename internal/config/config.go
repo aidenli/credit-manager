@@ -149,6 +149,11 @@ type Config struct {
 	Stream          StreamConfig          `yaml:"stream" json:"stream"`
 	SessionAffinity SessionAffinityConfig `yaml:"session_affinity" json:"session_affinity"`
 	APIFallback     APIFallbackConfig     `yaml:"api_fallback" json:"api_fallback"`
+	// AuthOnly skips the plugin executor and model router so request bodies are
+	// never copied into the plugin. Only Key auth, account binding and the Key
+	// concurrency cap stay active; text billing, quotas and fallback are off.
+	// Takes effect on CPA restart (registration is read once).
+	AuthOnly bool `yaml:"auth_only" json:"auth_only"`
 }
 
 func Default() Config {

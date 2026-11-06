@@ -75,6 +75,15 @@ func interceptRequestAfterAuth(raw []byte) ([]byte, error) {
 	if !isNativeImageProtocol(req.SourceFormat) && !service.IsImageOnlyModel(firstNonEmpty(req.RequestedModel, req.Model)) {
 		// CPA invokes this hook before its executor. Carry the lifecycle request ID
 		// into our executor, then remove it before the nested host model call.
+		if svc.Config().AuthOnly {
+			if err != nil {
+				return okEnvelope(quotaRejectResponse(http.StatusUnauthorized, err.Error()))
+			}
+			if !acquireKeySlot(requestID, key.ID, key.MaxConcurrentRequests) {
+				return okEnvelope(quotaRejectResponse(http.StatusTooManyRequests, store.ErrConcurrentLimit.Error()))
+			}
+			return okEnvelope(pluginapi.RequestInterceptResponse{})
+		}
 		if err == nil && req.Stream {
 			trackStreamLifecycle(requestID, svc)
 			return okEnvelope(pluginapi.RequestInterceptResponse{Headers: http.Header{
@@ -125,6 +134,7 @@ func completeInterceptedRequest(raw []byte) ([]byte, error) {
 	}
 	completeStreamLifecycle(req)
 	requestID := strings.TrimSpace(req.RequestID)
+	releaseKeySlot(requestID)
 	imageHoldsMu.Lock()
 	hold, ok := imageHolds[requestID]
 	if ok {
