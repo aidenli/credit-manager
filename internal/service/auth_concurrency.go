@@ -271,7 +271,7 @@ func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candi
 	const provider = "mixed"
 	sessionID := ""
 	if s.sessionAffinityEnabled() {
-		sessionID = sessionAffinityID(headers)
+		sessionID = requestSessionAffinityID(ctx, headers)
 	}
 	// Health is advisory within the highest tier, never a reason to promote a
 	// lower-priority credential. An errored-only tier can still recover by serving.

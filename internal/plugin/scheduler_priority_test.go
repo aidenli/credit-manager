@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yuluo688/credit-manager/internal/store"
 )
@@ -29,5 +30,60 @@ func TestPickAuthForwardsFallbackPriority(t *testing.T) {
 	out, err := pickAuth(raw)
 	if err != nil || !strings.Contains(string(out), `"AuthID":"higher"`) {
 		t.Fatalf("scheduler dropped priority: %s, %v", out, err)
+	}
+}
+
+// The host wire format (no json tags: Options.Headers / Options.Metadata) must
+// deliver the host-resolved session so one conversation stays on one account.
+func TestPickAuthUsesHostSessionMetadata(t *testing.T) {
+	svc, material := multiFallbackService(t)
+	key, _, err := svc.ResolveIdentity(context.Background(), map[string][]string{"Authorization": {"Bearer " + material}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store().ReplaceKeyAuthBindings(context.Background(), key.ID, []store.KeyAuthBinding{
+		{Provider: "codex", AuthID: "account-1"},
+		{Provider: "codex", AuthID: "account-2"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.UpdateAuthSessionAffinitySettings(context.Background(), store.SessionAffinitySettings{Enabled: true, TTL: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	pick := func(session string) string {
+		t.Helper()
+		raw, _ := json.Marshal(map[string]any{
+			"Model": "gpt-5",
+			"Options": map[string]any{
+				"Headers":  map[string][]string{"Authorization": {"Bearer " + material}},
+				"Metadata": map[string]any{"canonical_session_id": session},
+			},
+			"Candidates": []map[string]any{
+				{"ID": "account-1", "Provider": "codex", "Priority": 2},
+				{"ID": "account-2", "Provider": "codex", "Priority": 2},
+			},
+		})
+		out, err := pickAuth(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var env struct {
+			OK     bool `json:"ok"`
+			Result struct{ AuthID string }
+		}
+		_ = json.Unmarshal(out, &env)
+		if env.Result.AuthID == "" {
+			t.Fatalf("no auth picked: %s", out)
+		}
+		return env.Result.AuthID
+	}
+	first := pick("pck:conv-1")
+	for range 4 {
+		if got := pick("pck:conv-1"); got != first {
+			t.Fatalf("same host session drifted: %q then %q", first, got)
+		}
+	}
+	if other := pick("pck:conv-2"); other == first {
+		t.Fatalf("new session should rotate to the sibling account, got %q", other)
 	}
 }

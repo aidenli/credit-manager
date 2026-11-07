@@ -163,6 +163,48 @@ func sessionAffinityID(headers http.Header) string {
 	return ""
 }
 
+// Host scheduler metadata keys (sdk/cliproxy/executor). The host resolves the
+// session once per request (explicit headers, body session fields,
+// prompt_cache_key, execution session, or a hash of the conversation root) and
+// forwards the result in SchedulerOptions.Metadata.
+const (
+	hostCanonicalSessionMetadataKey = "canonical_session_id"
+	hostDerivedSessionMetadataKey   = "derived_session_id"
+)
+
+type schedulerMetadataContextKey struct{}
+
+// WithSchedulerMetadata attaches host scheduler metadata so PickAuthForKey can
+// use the host-resolved session identity.
+func WithSchedulerMetadata(ctx context.Context, metadata map[string]any) context.Context {
+	if len(metadata) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, schedulerMetadataContextKey{}, metadata)
+}
+
+func metadataSessionString(metadata map[string]any, key string) string {
+	value, _ := metadata[key].(string)
+	return strings.TrimSpace(value)
+}
+
+// requestSessionAffinityID prefers the host's canonical session, then the
+// host-derived conversation identity, then the plugin's own header extraction
+// (for hosts that do not forward metadata).
+func requestSessionAffinityID(ctx context.Context, headers http.Header) string {
+	if ctx != nil {
+		if metadata, _ := ctx.Value(schedulerMetadataContextKey{}).(map[string]any); len(metadata) > 0 {
+			if id := metadataSessionString(metadata, hostCanonicalSessionMetadataKey); id != "" {
+				return "host:" + id
+			}
+			if id := metadataSessionString(metadata, hostDerivedSessionMetadataKey); id != "" {
+				return "derived:" + id
+			}
+		}
+	}
+	return sessionAffinityID(headers)
+}
+
 func sessionAffinityKey(provider, sessionID, model string) string {
 	return provider + "::" + sessionID + "::" + model
 }

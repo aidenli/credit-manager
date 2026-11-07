@@ -293,6 +293,64 @@ func TestSessionAffinityIsStableAcrossMixedProviderCandidateOrder(t *testing.T) 
 	}
 }
 
+// The host-resolved session in scheduler metadata must pin a session even when
+// the client sends no session header (or a per-request X-Client-Request-Id).
+func TestSessionAffinityUsesHostSchedulerMetadata(t *testing.T) {
+	s, key, headers := affinityService(t, true)
+	candidates := bindTwo(t, s, key.ID)
+	bare := http.Header{}
+	bare.Set("Authorization", headers.Get("Authorization"))
+
+	for _, tc := range []struct {
+		name     string
+		metadata map[string]any
+	}{
+		{"canonical", map[string]any{hostCanonicalSessionMetadataKey: "pck:conv-1"}},
+		{"derived", map[string]any{hostDerivedSessionMetadataKey: "abc123"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := WithSchedulerMetadata(context.Background(), tc.metadata)
+			first, handled, err := s.PickAuthForKey(ctx, bare, candidates, "gpt-5")
+			if err != nil || !handled {
+				t.Fatalf("first pick = (%q, %t, %v)", first, handled, err)
+			}
+			for i := 0; i < 4; i++ {
+				reqHeaders := bare.Clone()
+				reqHeaders.Set("X-Client-Request-Id", "req-"+string(rune('a'+i)))
+				id, _, err := s.PickAuthForKey(ctx, reqHeaders, candidates, "gpt-5")
+				if err != nil || id != first {
+					t.Fatalf("pick %d = (%q, %v), want %q", i, id, err, first)
+				}
+			}
+		})
+	}
+}
+
+func TestRequestSessionAffinityIDPrecedence(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("Session-Id", "s1")
+	cases := []struct {
+		name     string
+		metadata map[string]any
+		headers  http.Header
+		want     string
+	}{
+		{"canonical wins", map[string]any{hostCanonicalSessionMetadataKey: " c1 ", hostDerivedSessionMetadataKey: "d1"}, headers, "host:c1"},
+		{"derived next", map[string]any{hostDerivedSessionMetadataKey: "d1"}, headers, "derived:d1"},
+		{"headers without metadata", nil, headers, "codex:s1"},
+		{"non-string metadata ignored", map[string]any{hostCanonicalSessionMetadataKey: 7}, headers, "codex:s1"},
+		{"nothing", nil, http.Header{}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := WithSchedulerMetadata(context.Background(), tc.metadata)
+			if got := requestSessionAffinityID(ctx, tc.headers); got != tc.want {
+				t.Fatalf("requestSessionAffinityID = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // The binding key must include model and provider, mirroring the host.
 func TestSessionAffinityKeyIncludesProviderAndModel(t *testing.T) {
 	if got, want := sessionAffinityKey("codex", "codex:s1", "gpt-5"), "codex::codex:s1::gpt-5"; got != want {
