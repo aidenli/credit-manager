@@ -43,12 +43,9 @@ func apiCandidates() []AuthPickCandidate {
 	}
 }
 
-// A bound key whose accounts are not in the candidate window is served by the
-// API provider instead of failing, because the operator opted in.
-// A key whose own concurrency limit is already in flight would have its bound
-// attempt rejected before it started. The fallback serves the request instead, so
-// the limit reads as "at most N requests carried by the key's own accounts".
-func TestPickAuthForKeySpillsToFallbackWhenKeyConcurrencyIsFull(t *testing.T) {
+// Key admission and credential selection are separate: a full key must not
+// force a lower-priority API pick or bypass the key's concurrency policy.
+func TestPickAuthForKeyKeepsPriorityWhenKeyConcurrencyIsFull(t *testing.T) {
 	s := fallbackService(t, true)
 	ctx := context.Background()
 	if err := s.Store().PutPricingRule(ctx, store.PricingRule{
@@ -73,23 +70,29 @@ func TestPickAuthForKeySpillsToFallbackWhenKeyConcurrencyIsFull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, handled, err := s.PickAuthForKey(ctx, headers, apiCandidates(), "gpt-5.6-sol")
-	if err != nil || !handled || id != apiAccount1 {
-		t.Fatalf("spilled pick = (%q, %t, %v)", id, handled, err)
+	candidates := apiCandidates()
+	candidates[0].Priority = 2
+	candidates[1].Priority = 1
+	id, handled, err := s.PickAuthForKey(ctx, headers, candidates, "gpt-5.6-sol")
+	if err != nil || !handled || id != "account-1" {
+		t.Fatalf("full-key priority pick = (%q, %t, %v)", id, handled, err)
+	}
+	if _, err := s.Reserve(ctx, key, plan, "another-in-flight"); !errors.Is(err, store.ErrConcurrentLimit) {
+		t.Fatalf("key admission must still enforce its cap: %v", err)
 	}
 	status, err := s.AuthFallbackStatus(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.LastHit == nil || status.LastHit.Reason != authFallbackReasonKeyBusy {
-		t.Fatalf("fallback reason = %#v, want %q", status.LastHit, authFallbackReasonKeyBusy)
+	if status.TotalHits != 0 || status.LastHit != nil {
+		t.Fatalf("scheduler must not record execution replay: %#v", status)
 	}
 
-	// Once the key's slot is free the bound account is chosen again.
+	// Releasing the key slot does not change credential priority.
 	if err := s.Release(ctx, held.ID, "test"); err != nil {
 		t.Fatal(err)
 	}
-	id, handled, err = s.PickAuthForKey(ctx, headers, apiCandidates(), "gpt-5.6-sol")
+	id, handled, err = s.PickAuthForKey(ctx, headers, candidates, "gpt-5.6-sol")
 	if err != nil || !handled || id != "account-1" {
 		t.Fatalf("bound pick after release = (%q, %t, %v)", id, handled, err)
 	}
@@ -167,17 +170,17 @@ func TestPickAuthForKeyFallsBackToAPIProvider(t *testing.T) {
 	}
 }
 
-// Without the opt-in the previous behaviour is untouched: the request fails
-// closed rather than spending money on a shared account.
-func TestPickAuthForKeyFallbackDisabledStillFailsClosed(t *testing.T) {
+// The old execution-replay toggle must not hide global API credentials from
+// the scheduler's authorized candidate pool.
+func TestPickAuthForKeyUsesAPIWithExecutionFallbackDisabled(t *testing.T) {
 	s := fallbackService(t, false)
 	ctx := context.Background()
 	key, headers := boundKey(t, s, "no-fallback")
 	bindOneAccount(t, s, key.ID, "account-9")
 
 	id, handled, err := s.PickAuthForKey(ctx, headers, apiCandidates(), "gpt-5.6-sol")
-	if !handled || id != "" || !errors.Is(err, ErrNoBoundAuthAvailable) {
-		t.Fatalf("disabled fallback pick = (%q, %t, %v)", id, handled, err)
+	if err != nil || !handled || id != apiAccount1 {
+		t.Fatalf("API pick with execution replay disabled = (%q, %t, %v)", id, handled, err)
 	}
 }
 
@@ -230,13 +233,13 @@ func TestPickAuthForKeyFallbackUsesErroredAPIProvider(t *testing.T) {
 	if err != nil || !handled || id != apiAccount1 {
 		t.Fatalf("errored api pick = (%q, %t, %v)", id, handled, err)
 	}
-	// It is still recorded, so the operator sees the fallback spending money.
+	// Scheduler picks are not legacy execution replays.
 	status, err := s.AuthFallbackStatus(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.TotalHits != 1 {
-		t.Fatalf("hits = %d", status.TotalHits)
+	if status.TotalHits != 0 || status.LastHit != nil {
+		t.Fatalf("unexpected execution replay hits: %#v", status)
 	}
 }
 
@@ -268,18 +271,23 @@ func TestPickAuthForKeyFallbackHonoursAPIConcurrencyLimit(t *testing.T) {
 	}
 }
 
-// A healthy bound account always wins; the fallback only covers the failure path.
-func TestPickAuthForKeyPrefersBoundAccountOverFallback(t *testing.T) {
+// OAuth and API credentials at equal priority share the same rotation pool.
+func TestPickAuthForKeyRotatesBoundAndGlobalAPIAtEqualPriority(t *testing.T) {
 	s := fallbackService(t, true)
 	ctx := context.Background()
 	key, headers := boundKey(t, s, "healthy")
 	bindOneAccount(t, s, key.ID, "account-1")
 
-	for i := 0; i < 3; i++ {
+	seen := map[string]int{}
+	for i := 0; i < 4; i++ {
 		id, handled, err := s.PickAuthForKey(ctx, headers, apiCandidates(), "gpt-5.6-sol")
-		if err != nil || !handled || id != "account-1" {
-			t.Fatalf("healthy pick %d = (%q, %t, %v)", i, id, handled, err)
+		if err != nil || !handled {
+			t.Fatalf("equal-priority pick %d = (%q, %t, %v)", i, id, handled, err)
 		}
+		seen[id]++
+	}
+	if seen["account-1"] != 2 || seen[apiAccount1] != 2 {
+		t.Fatalf("equal-priority mixed rotation = %#v", seen)
 	}
 }
 
@@ -329,14 +337,17 @@ func TestPickAuthForKeyFallbackRotatesAcrossAPIProviders(t *testing.T) {
 	}
 }
 
-// Keys without bindings stay entirely with the host scheduler.
-func TestPickAuthForKeyFallbackLeavesUnboundKeysAlone(t *testing.T) {
-	s := fallbackService(t, true)
-	_, headers := boundKey(t, s, "unbound-fallback")
+// Unbound plugin keys use the global priority pool without the legacy replay toggle.
+func TestPickAuthForKeySchedulesUnboundGlobalAPIByPriority(t *testing.T) {
+	s := fallbackService(t, false)
+	_, headers := boundKey(t, s, "unbound-global")
+	candidates := apiCandidates()
+	candidates[0].Priority = 1
+	candidates[1].Priority = 2
 
-	id, handled, err := s.PickAuthForKey(context.Background(), headers, apiCandidates(), "gpt-5.6-sol")
-	if err != nil || handled || id != "" {
-		t.Fatalf("unbound pick = (%q, %t, %v)", id, handled, err)
+	id, handled, err := s.PickAuthForKey(context.Background(), headers, candidates, "gpt-5.6-sol")
+	if err != nil || !handled || id != apiAccount1 {
+		t.Fatalf("unbound global API pick = (%q, %t, %v)", id, handled, err)
 	}
 }
 
@@ -394,9 +405,9 @@ func TestPickAuthForKeyFallbackRequiresValidKey(t *testing.T) {
 	}
 }
 
-// Every fallback decision is persisted, because from the client's point of view
-// the request simply succeeded.
-func TestPickAuthForKeyRecordsFallbackHit(t *testing.T) {
+// Only legacy execution replays add fallback audit hits; an ordinary API pick
+// must not be presented as an execution failure/replay.
+func TestRecordUpstreamFallbackPreservesCountersAndDetails(t *testing.T) {
 	s := fallbackService(t, true)
 	ctx := context.Background()
 	key, headers := boundKey(t, s, "recorded")
@@ -418,8 +429,16 @@ func TestPickAuthForKeyRecordsFallbackHit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if status.TotalHits != 0 || status.RecentHits != 0 || status.LastHit != nil {
+		t.Fatalf("scheduler pick recorded an execution replay: %#v", status)
+	}
+	s.RecordUpstreamFallback(ctx, key, apiProvider, "gpt-5.6-sol")
+	status, err = s.AuthFallbackStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !status.Settings.Enabled || status.TotalHits != 1 || status.RecentHits != 1 {
-		t.Fatalf("status after one hit = %#v", status)
+		t.Fatalf("status after one execution replay = %#v", status)
 	}
 	hit := status.LastHit
 	if hit == nil {
@@ -428,10 +447,10 @@ func TestPickAuthForKeyRecordsFallbackHit(t *testing.T) {
 	if hit.PluginKeyID != key.ID || hit.Label != "recorded" {
 		t.Fatalf("hit key = %#v", hit)
 	}
-	if hit.Provider != apiProvider || hit.AuthID != apiAccount1 || hit.Model != "gpt-5.6-sol" {
+	if hit.Provider != apiProvider || hit.AuthID != apiProvider || hit.Model != "gpt-5.6-sol" {
 		t.Fatalf("hit details = %#v", hit)
 	}
-	if hit.Reason != authFallbackReasonNotOffered {
+	if hit.Reason != authFallbackReasonUpstreamError {
 		t.Fatalf("hit reason = %q", hit.Reason)
 	}
 	if hit.At.IsZero() {
@@ -439,9 +458,9 @@ func TestPickAuthForKeyRecordsFallbackHit(t *testing.T) {
 	}
 }
 
-// A bound account that is offered but busy is recorded with its own reason, so
-// the console can tell "never routed here" from "at capacity".
-func TestPickAuthForKeyRecordsBusyReason(t *testing.T) {
+// Account-capacity routing is an ordinary scheduler decision, not a legacy
+// execution replay, even when it selects an API credential.
+func TestPickAuthForKeyDoesNotRecordBusyRoutingAsReplay(t *testing.T) {
 	s := fallbackService(t, true)
 	ctx := context.Background()
 	key, headers := boundKey(t, s, "busy-reason")
@@ -463,20 +482,21 @@ func TestPickAuthForKeyRecordsBusyReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.TotalHits != 1 || status.LastHit == nil || status.LastHit.Reason != authFallbackReasonBusy {
-		t.Fatalf("status = %#v (last=%#v)", status, status.LastHit)
+	if status.TotalHits != 0 || status.LastHit != nil {
+		t.Fatalf("scheduler capacity routing recorded a replay: %#v", status)
 	}
 }
 
-// Disabled and failing paths must not inflate the counter.
-func TestPickAuthForKeyDoesNotRecordWithoutFallback(t *testing.T) {
+// Neither successful scheduler picks nor failing paths inflate execution-replay
+// counters, regardless of the old execution toggle.
+func TestPickAuthForKeyDoesNotRecordExecutionReplay(t *testing.T) {
 	ctx := context.Background()
 	s := fallbackService(t, false)
 	key, headers := boundKey(t, s, "no-record")
 	bindOneAccount(t, s, key.ID, "account-9")
 
-	if _, _, err := s.PickAuthForKey(ctx, headers, apiCandidates(), "gpt-5.6-sol"); !errors.Is(err, ErrNoBoundAuthAvailable) {
-		t.Fatalf("disabled pick error = %v", err)
+	if id, handled, err := s.PickAuthForKey(ctx, headers, apiCandidates(), "gpt-5.6-sol"); err != nil || !handled || id != apiAccount1 {
+		t.Fatalf("pick with execution replay disabled = (%q, %t, %v)", id, handled, err)
 	}
 	// Enabled, but the request offers no API provider to fall back to.
 	s.setAuthFallbackRuntime(true)
@@ -507,7 +527,7 @@ func TestNoBoundAuthErrorCarriesDiagnostics(t *testing.T) {
 	}
 	msg := err.Error()
 	for _, want := range []string{
-		"fallback=enabled", "candidates=2", "api=1", "usable=0",
+		"policy=priority", "candidates=2", "api=1", "enabled_api=0",
 		"codex:1", "openai-compatible-agnes:1",
 	} {
 		if !strings.Contains(msg, want) {
@@ -515,8 +535,8 @@ func TestNoBoundAuthErrorCarriesDiagnostics(t *testing.T) {
 		}
 	}
 	s.setAuthFallbackRuntime(false)
-	if msg := s.noBoundAuthError(nil).Error(); !strings.Contains(msg, "fallback=disabled") {
-		t.Fatalf("disabled diagnostic = %q", msg)
+	if msg := s.noBoundAuthError(nil).Error(); !strings.Contains(msg, "policy=priority") || strings.Contains(msg, "fallback=") {
+		t.Fatalf("diagnostic must not imply the execution toggle controls scheduling: %q", msg)
 	}
 }
 
@@ -524,12 +544,8 @@ func TestNoBoundAuthErrorCarriesDiagnostics(t *testing.T) {
 func TestFallbackHitAppearsInAuditStream(t *testing.T) {
 	s := fallbackService(t, true)
 	ctx := context.Background()
-	key, headers := boundKey(t, s, "audit-stream")
-	bindOneAccount(t, s, key.ID, "account-9")
-
-	if _, _, err := s.PickAuthForKey(ctx, headers, apiCandidates(), "gpt-5.6-sol"); err != nil {
-		t.Fatal(err)
-	}
+	key, _ := boundKey(t, s, "audit-stream")
+	s.RecordUpstreamFallback(ctx, key, apiProvider, "gpt-5.6-sol")
 	events, err := s.Store().ListAuditEventsFiltered(ctx, store.AuditFilter{PluginKeyID: key.ID, Limit: 10})
 	if err != nil {
 		t.Fatal(err)

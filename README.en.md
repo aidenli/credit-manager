@@ -154,16 +154,26 @@ The usage tab also lists released attempts at the bottom: holds that were releas
 
 The self-service page is not listed in the management sidebar and needs no host management token. The plugin Key is sent only in the current request's `Authorization` header, never in the URL or browser storage. Public responses exclude caller IDs, auth accounts, emails, and auth-file paths.
 
-### Fallback compatibility and observability
+### Unified priority scheduling and session affinity
 
-When a bound Key's request lands on an API provider (the fallback), the plugin:
+The plugin registers `SchedulerAcrossPriorities=true` to receive available candidates across priority tiers. A bound Key may use its own bound OAuth accounts and global API credentials, never another OAuth account; an unbound Key uses global candidates. Selection filters permissions, disabled status, auth concurrency and warmup holds before choosing the highest numeric `priority`. Equal-priority credentials rotate or retain session affinity. An API credential with a higher priority may be selected before OAuth.
+
+Affinity only reuses a credential within the current highest-priority pool; an unavailable binding or a newly available higher-priority pool triggers reselection. The host executes requests and retries; every new pick retains permission checks. API providers need matching host model aliases to serve GPT names: scheduling does not rewrite the requested model. Host credential-attempt limits, cooldowns and timeouts still apply.
+
+`auth_only: true` keeps authentication and scheduling but omits plugin model-router/executor registration, avoiding full request bodies in the plugin executor. `auth_only: false` retains legacy execution. Mode changes require reloading plugin registration. Neither mode's scheduling depends on the legacy API fallback toggle or provider allowlist.
+
+### Legacy execution replay and observability
+
+The following executor features only apply with `auth_only: false`. The management fallback endpoint and stored `enabled` switch remain compatible, but control legacy execution replay only, not scheduler choices or API permissions. The console disables this control in auth-only mode. Historical fallback counters remain available; they are not a count of all API selections. `api_fallback.provider`/`providers` and `model` only configure legacy replay.
+
+When the legacy plugin executor calls an API provider, the plugin:
 
 - pins the nested execution to that provider (`forced_provider`) so the host's own selector cannot move the request to another provider;
 - downgrades `json_schema` structured output in `response_format`/`text.format` to `json_object` (and drops unknown types), because the provider's rejection otherwise reached clients as a hard 500;
 - supplies the thinking-mode `reasoning_content` field: DeepSeek requires it on every assistant message once a tool call has happened, and a history translated across providers is missing it, so the plugin adds the host's own `[reasoning unavailable]` placeholder (it never strips an existing value);
 - reports request failures with the upstream text, and any body rewrite, through the host's `host.log`, sharing the request id with the host's own log lines, so the message a client displayed can be traced back to its source.
 
-Fallback concurrency accounting: a key's `max_concurrent_requests` and its active count cover only in-flight requests served by the key's own accounts. Once the limit is reached the plugin no longer rejects the request: it spills over to the fallback (when that is enabled and an API provider is in the current candidate window), so the limit means "at most N requests carried by the key's own accounts, the rest go to the paid provider". Only when the fallback is unavailable does the original concurrency rejection apply. Auth concurrency is charged to the credential an attempt was dispatched to, so fallback attempts count against the API provider and never against the bound OAuth account.
+Concurrency and priority are independent. With `auth_only: true`, a Key's `max_concurrent_requests` covers all its in-flight text requests, including API traffic; a full Key is rejected rather than bypassing its total limit through an API. With `auth_only: false`, legacy reservation/settlement accounting remains (API attempts do not consume bound OAuth concurrency); this no longer implies scheduler overflow controlled by the old replay toggle. Auth concurrency is charged to the credential actually dispatched.
 
 ## Limits and Settlement
 

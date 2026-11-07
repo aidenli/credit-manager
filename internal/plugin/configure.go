@@ -71,6 +71,8 @@ func pluginRegistration(schemaVersion uint32) registration {
 			RequestLifecyclePlugin:           true,
 			ResponseInterceptor:              true,
 			Scheduler:                        true,
+			// Permission and availability filters must run before priority selection.
+			SchedulerAcrossPriorities: true,
 		},
 	}
 	if authOnly {

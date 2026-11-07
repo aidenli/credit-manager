@@ -34,22 +34,26 @@ stream:
   max_buffer_bytes: 4194304
   stale_reservation_timeout: 2h
 
-# 绑定 Key 的会话黏性（默认关闭，保持按请求轮询）。
-# 开启后，同一会话在 TTL 内固定使用同一个已绑定账号，提升 prompt cache 命中率、降低首字延迟；
-# 只会在这个 Key 自己的绑定账户中选择，仍然是访问隔离边界，不会用到未绑定账号。
+# 保留轻量鉴权/调度模式；true 不注册插件模型路由与执行器，false 保留旧执行模式。
+# 切换模式需重新加载插件注册能力。无论哪种模式，调度均按权限→可用性→最高 priority 选择，
+# 不依赖下方 api_fallback 或旧执行期重放开关。绑定 Key 允许自己的 OAuth + 全局 API；无绑定为全局候选。
+auth_only: false
+
+# 插件会话黏性（默认关闭，保持按请求轮询）。
+# 开启后，同一会话在 TTL 内复用权限/可用性过滤后的最高优先级池中的账号；
+# 黏性不会越过 Key 权限，也不会把会话固定在低于当前可用最高 priority 的账号上。
 # 会话标识取自请求头，优先级与宿主 routing.session-affinity 一致：
 #   X-Claude-Code-Session-Id > Session-Id / Session_id > X-Session-ID > X-Session-Affinity > X-Client-Request-Id
-# 缺少会话标识、或该 Key 只有 1 个可用绑定账号时，行为与关闭时完全相同。
-# 绑定账号不可用（并发上限、warmup 占用、被移出候选）时会自动重新选择并重新绑定，不会卡死。
-# 与宿主 routing.session-affinity 的关系：绑定 Key 由插件决定账号，宿主的会话黏性不参与，
-# 因此需要亲和时请在插件这里开启，宿主侧开不开都不影响绑定 Key。
+# 缺少会话标识时按同级轮询；账号不可用（并发上限、warmup 占用、被移出候选）时重新选择并绑定。
+# 插件处理账号选择时宿主的会话黏性不参与，因此需要亲和时请在插件这里开启。
 session_affinity:
   enabled: false
   ttl: 1h
 
-# API 供应商执行期兜底：OAuth 账号这次请求失败（429、408、5xx、限流、流内 overload /
-# usage_limit / 加密推理校验失败等），且还没有向客户端输出正文时，插件用同一请求改发到这里。
-# 是否启用仍由控制台的兜底开关（auth-quotas/fallback）决定。
+# 仅 auth_only=false 的旧 API 执行期重放：OAuth 失败（429、408、5xx、限流、流内 overload /
+# usage_limit / 加密推理校验失败等）且还没有向客户端输出正文时，插件用同一请求改发到这里。
+# 是否重放由控制台的旧执行期开关（auth-quotas/fallback）决定；auth_only=true 时该功能不启用。
+# 以下开关、名单与模型均不限制正常调度；API 的正常选择只由权限、可用性和 priority 决定。
 # 下面保留旧的单家默认配置；provider 或 model 留空即关闭执行期兜底。
 # model 替换客户端请求的模型名；宿主必须能把这个名字路由到目标供应商。
 api_fallback:
@@ -63,10 +67,8 @@ api_fallback:
   #   - openai-compatible-magpie
   #   - openai-compatible-deepseek
   #
-  # 调度期与执行期共用白名单，但轮换单位不同：
-  # 调度期仅在宿主当前候选窗口内选最高 priority 的 API 凭据，同级按凭据 ID 轮换；
-  # 例如同级两家分别有 3 个、1 个凭据时为 3:1，不是提供商均分流量。
-  # 宿主窗口已按优先级筛选，插件不能发现窗口外的低优先级候选；无白名单候选就拒绝。
+  # 此名单仅控制 auth_only=false 的执行期重放；正常调度跨优先级接收可用候选，
+  # 按权限→可用性→最高 priority→同级轮询/会话黏性选择，不读取此名单或旧重放开关。
   # 执行期从 host.auth.list 快照按 priority 高者先，同级提供商按请求轮换，
   # 每家强制重放一次；家内仍由宿主重试和冷却。不是按列表顺序，
   # 也不等同宿主原生的跨提供商/凭据混合调度。

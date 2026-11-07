@@ -178,10 +178,10 @@ func updateAuthSessionAffinitySettings(ctx context.Context, svc *service.Service
 	return jsonOKNoStore(sessionAffinityView(updated)), nil
 }
 
-// authFallbackSettingsView is the JSON shape the console renders for the
-// API-provider fallback of bound keys. The counters make a silent switch to paid
-// traffic visible.
+// authFallbackSettingsView retains the legacy execution-time replay switch and
+// historical counters. Neither the switch nor its provider list controls scheduling.
 type authFallbackSettingsView struct {
+	AuthOnly  bool                 `json:"auth_only"`
 	Enabled   bool                 `json:"enabled"`
 	UpdatedAt string               `json:"updated_at,omitempty"`
 	HitsTotal int64                `json:"hits_total"`
@@ -229,7 +229,9 @@ func getAuthFallbackSettings(ctx context.Context, svc *service.Service) (plugina
 	if err != nil {
 		return jsonErrNoStore(http.StatusServiceUnavailable, "auth fallback settings unavailable"), nil
 	}
-	return jsonOKNoStore(authFallbackView(status)), nil
+	view := authFallbackView(status)
+	view.AuthOnly = svc.Config().AuthOnly
+	return jsonOKNoStore(view), nil
 }
 
 func updateAuthFallbackSettings(ctx context.Context, svc *service.Service, body []byte) (pluginapi.ManagementResponse, error) {
@@ -255,7 +257,9 @@ func updateAuthFallbackSettings(ctx context.Context, svc *service.Service, body 
 	if err != nil {
 		return jsonErrNoStore(http.StatusServiceUnavailable, "auth fallback settings unavailable"), nil
 	}
-	return jsonOKNoStore(authFallbackView(status)), nil
+	view := authFallbackView(status)
+	view.AuthOnly = svc.Config().AuthOnly
+	return jsonOKNoStore(view), nil
 }
 
 func updateAuthQuotaConcurrency(ctx context.Context, svc *service.Service, body []byte) (pluginapi.ManagementResponse, error) {

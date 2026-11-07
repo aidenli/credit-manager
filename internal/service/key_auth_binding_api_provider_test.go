@@ -91,13 +91,9 @@ func TestPickAuthForKeyRotatesAcrossOAuthAndAPIProvider(t *testing.T) {
 		}
 		seen[id]++
 	}
-	// Selection keys its cursor on the first available candidate's provider, so
-	// with mixed providers the rotation stays inside one provider group. Both
-	// accounts must still be reachable across the two scopes.
-	if seen[oauthAuthID] == 0 {
-		t.Fatalf("oauth account never selected: %#v", seen)
+	if seen[oauthAuthID] != 2 || seen[compatAuthID] != 2 {
+		t.Fatalf("equal-priority mixed rotation = %#v", seen)
 	}
-	t.Logf("rotation across mixed providers: %#v", seen)
 }
 
 // A bound API-key account the host explicitly disabled must fail closed, exactly

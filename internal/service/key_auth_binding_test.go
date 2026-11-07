@@ -78,13 +78,15 @@ func TestPickAuthForKeyFailsClosedWhenNoBoundAccountIsUsable(t *testing.T) {
 	}
 }
 
-func TestPickAuthForKeyKeepsUnboundBehaviour(t *testing.T) {
+func TestPickAuthForKeySchedulesUnboundGlobalPool(t *testing.T) {
 	s := quotaService(t)
 	ctx := context.Background()
 	_, headers := boundKey(t, s, "unbound")
-	candidates := []AuthPickCandidate{{ID: "account-1", Provider: "codex"}, {ID: "account-2", Provider: "codex"}}
-	if id, handled, err := s.PickAuthForKey(ctx, headers, candidates, "gpt-5"); err != nil || handled || id != "" {
-		t.Fatalf("unlimited unbound pick = (%q, %t, %v)", id, handled, err)
+	candidates := []AuthPickCandidate{{ID: "account-1", Provider: "codex", Priority: 2}, {ID: "account-2", Provider: "codex", Priority: 1}}
+	for range 3 {
+		if id, handled, err := s.PickAuthForKey(ctx, headers, candidates, "gpt-5"); err != nil || !handled || id != "account-1" {
+			t.Fatalf("unlimited unbound priority pick = (%q, %t, %v)", id, handled, err)
+		}
 	}
 	if err := s.Store().UpsertAuthConcurrencyLimit(ctx, "codex", "account-1", 1); err != nil {
 		t.Fatal(err)
@@ -96,6 +98,16 @@ func TestPickAuthForKeyKeepsUnboundBehaviour(t *testing.T) {
 	id, handled, err := s.PickAuthForKey(ctx, headers, candidates, "gpt-5")
 	if err != nil || !handled || id != "account-2" {
 		t.Fatalf("limited unbound pick = (%q, %t, %v)", id, handled, err)
+	}
+}
+
+func TestPickAuthForKeyLeavesNativeCredentialsWithHost(t *testing.T) {
+	s := quotaService(t)
+	headers := http.Header{"Authorization": []string{"Bearer native-host-key"}}
+	candidates := []AuthPickCandidate{{ID: "account-1", Provider: "codex", Priority: 2}, {ID: apiAccount1, Provider: apiProvider, Priority: 1}}
+	id, handled, err := s.PickAuthForKey(context.Background(), headers, candidates, "gpt-5")
+	if err != nil || handled || id != "" {
+		t.Fatalf("native credentials must remain delegated = (%q, %t, %v)", id, handled, err)
 	}
 }
 

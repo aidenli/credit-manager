@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yuluo688/credit-manager/internal/config"
 	"github.com/yuluo688/credit-manager/internal/service"
 	"github.com/yuluo688/credit-manager/internal/store"
 )
@@ -16,7 +17,7 @@ func TestAuthFallbackSettingsRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	svc := bindingsTestService(t)
 
-	// Default is off, so an upgrade never starts spending on a shared account.
+	// Legacy executor replay defaults off; this switch no longer governs scheduling.
 	resp, err := getAuthFallbackSettings(ctx, svc)
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +83,55 @@ func TestAuthFallbackSettingsRoundTrip(t *testing.T) {
 	}
 	if view["enabled"] != true {
 		t.Fatalf("field-missing update changed the toggle: %#v", view["enabled"])
+	}
+}
+
+func TestAuthFallbackSettingsReportsExecutionMode(t *testing.T) {
+	for _, authOnly := range []bool{false, true} {
+		name := "legacy-executor"
+		if authOnly {
+			name = "auth-only"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("CREDIT_MANAGER_TEST_PEPPERS", "active:0123456789abcdef0123456789abcdef")
+			cfg := config.Default()
+			cfg.DataDir = t.TempDir()
+			cfg.Keys.PepperEnv = "CREDIT_MANAGER_TEST_PEPPERS"
+			cfg.Keys.ActivePepperID = "active"
+			cfg.AuthOnly = authOnly
+			ctx := context.Background()
+			svc, err := service.Open(ctx, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = svc.Close() })
+			resp, err := getAuthFallbackSettings(ctx, svc)
+			for _, method := range []string{"GET", "POST"} {
+				if method == "POST" {
+					resp, err = updateAuthFallbackSettings(ctx, svc, []byte(`{"enabled":true}`))
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if resp.StatusCode != http.StatusOK {
+					t.Fatalf("%s status = %d body=%s", method, resp.StatusCode, resp.Body)
+				}
+				var view map[string]any
+				if err := json.Unmarshal(resp.Body, &view); err != nil {
+					t.Fatal(err)
+				}
+				if view["auth_only"] != authOnly {
+					t.Fatalf("%s auth_only = %#v, want %t", method, view["auth_only"], authOnly)
+				}
+				if view["enabled"] != (method == "POST") {
+					t.Fatalf("%s legacy toggle = %#v", method, view["enabled"])
+				}
+			}
+			stored, err := svc.Store().GetAuthFallbackSettings(ctx)
+			if err != nil || !stored.Enabled {
+				t.Fatalf("legacy compatibility setting = %#v, err=%v", stored, err)
+			}
+		})
 	}
 }
 
@@ -175,7 +225,13 @@ func TestConsoleExposesAuthFallbackToggle(t *testing.T) {
 		"function loadAuthFallbackSettings",
 		"function saveAuthFallbackSettings",
 		"credit-manager/auth-quotas/fallback",
-		"API 兜底（绑定 Key）",
+		"执行期 API 重放（旧模式）",
+		"settings.auth_only",
+		"toggle.disabled = authOnly",
+		"toggle.disabled = toggle.dataset.authOnly === 'true'",
+		"当前 auth_only 模式不启用",
+		"API 不受此开关或旧白名单限制",
+		"黏性不能越过权限或优先级",
 		"settings.hits_total",
 		`class="auth-quota-switches"`,
 	} {

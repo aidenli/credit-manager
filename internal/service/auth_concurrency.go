@@ -189,16 +189,17 @@ func (s *Service) PickAuth(ctx context.Context, candidates []AuthPickCandidate) 
 	if len(available) == 0 {
 		return "", true, store.ErrConcurrentLimit
 	}
-	chosen := s.nextAuthPickLocked("", available)
+	chosen := s.nextAuthPickLocked("global", highestPriorityAuths(available))
 	s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: strings.TrimSpace(chosen.ID), Provider: chosen.Provider})
 	return strings.TrimSpace(chosen.ID), true, nil
 }
 
 // PickAuthForKey routes one scheduler decision for the key behind the request.
-// Keys without bindings keep the unbound behaviour unchanged. Bound keys may
-// only use their own accounts; when none of them can serve the request they fall
-// back to an API provider if the operator enabled that, and otherwise fail
-// closed.
+// Plugin keys without bindings use the global pool through this same selector,
+// so host affinity cannot retain a lower-priority account. Bound keys may use
+// their own accounts plus any global OpenAI-compatible API credential. Permissions and
+// availability are filtered before priority; an empty authorized pool fails closed.
+// Legacy execution-replay settings do not affect scheduler permissions.
 //
 // model only participates in the session-affinity binding key (mirroring the
 // host's provider::session::model cache key); selection itself is model-agnostic
@@ -222,9 +223,6 @@ func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candi
 	if err != nil {
 		return "", false, err
 	}
-	if len(bindings) == 0 {
-		return s.PickAuth(ctx, candidates)
-	}
 	bound := make(map[string]struct{}, len(bindings))
 	for _, binding := range bindings {
 		provider, id := authLimitProvider(binding.Provider), strings.TrimSpace(binding.AuthID)
@@ -239,7 +237,7 @@ func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candi
 		if provider == "" || id == "" {
 			continue
 		}
-		if _, ok := bound[provider+"\x00"+id]; !ok {
+		if _, ok := bound[provider+"\x00"+id]; len(bindings) > 0 && !ok && !authProviderIsAPI(provider) {
 			continue
 		}
 		// The host's status is a snapshot taken when the candidate list was built.
@@ -255,73 +253,56 @@ func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candi
 	if err != nil {
 		return "", false, err
 	}
-	// A key that already has its own concurrency limit in flight would have this
-	// attempt rejected when the executor reserves, which is a hard failure for the
-	// client even though the API provider could serve it. Spill to the fallback
-	// instead, so the limit reads as "at most N requests carried by the key's own
-	// accounts".
-	keyBusy := false
-	if key.MaxConcurrentRequests > 0 {
-		active, err := s.store.CountActiveKeyReservations(ctx, key.ID)
-		if err != nil {
-			return "", false, err
-		}
-		keyBusy = active >= key.MaxConcurrentRequests
-	}
-	// The lock is released explicitly rather than deferred: the fallback audit
-	// write is I/O and must not run while holding the lock shared by every pick.
+	// Key admission stays in authentication/reservation; routing must not bypass
+	// it or change priority just because an API credential is shared.
 	s.authMu.Lock()
+	defer s.authMu.Unlock()
 	s.ensureAuthPendingLocked()
-	// One branch covers both fail-closed cases: no bound account is offered for
-	// this request (scoped is empty) and every bound account is at its
-	// concurrency cap or warmup-held (available is empty).
 	available, _ := s.filterAvailableAuthLocked(limits, scoped)
 	if len(available) == 0 {
-		fallback, ok := s.pickFallbackAPIAuthLocked(limits, candidates)
-		reason := authFallbackReasonBusy
-		if len(scoped) == 0 {
-			reason = authFallbackReasonNotOffered
+		if len(bindings) == 0 {
+			return "", true, store.ErrConcurrentLimit
 		}
-		if ok {
-			fallbackID := strings.TrimSpace(fallback.ID)
-			s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: fallbackID, Provider: fallback.Provider})
-			s.authMu.Unlock()
-			s.recordAuthFallbackHit(ctx, key, fallback, model, reason)
-			return fallbackID, true, nil
-		}
-		s.authMu.Unlock()
 		return "", true, s.noBoundAuthError(candidates)
 	}
-	if keyBusy {
-		if fallback, ok := s.pickFallbackAPIAuthLocked(limits, candidates); ok {
-			fallbackID := strings.TrimSpace(fallback.ID)
-			s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: fallbackID, Provider: fallback.Provider})
-			s.authMu.Unlock()
-			s.recordAuthFallbackHit(ctx, key, fallback, model, authFallbackReasonKeyBusy)
-			return fallbackID, true, nil
-		}
-		// Without a usable API provider the ordinary bound pick stands, so the
-		// client gets the key's concurrency rejection rather than a routing error.
-	}
-	// Bound keys keep their own cursor so one key cannot skew another key's rotation.
-	// With session affinity enabled the session, not the key, decides the account.
-	provider := authLimitProvider(available[0].Provider)
+	available = highestPriorityAuths(available)
+	// A stable mixed-provider namespace keeps affinity independent of candidate
+	// ordering. Lookup only sees the authorized, available highest-priority tier.
+	const provider = "mixed"
 	sessionID := ""
 	if s.sessionAffinityEnabled() {
 		sessionID = sessionAffinityID(headers)
 	}
-	// A healthy sibling wins over an account the host flagged, but a flagged
-	// account stays selectable when it is all the key has: otherwise the flag can
-	// never clear (only serving a request clears it) and the key would sit on the
-	// API-provider fallback forever.
+	// Health is advisory within the highest tier, never a reason to promote a
+	// lower-priority credential. An errored-only tier can still recover by serving.
 	pickFrom := available
 	if healthy := withoutErroredAuths(available); len(healthy) > 0 {
 		pickFrom = healthy
 	}
 	chosen := s.chooseBoundAuthLocked(key.ID+"\x00"+provider, provider, sessionID, strings.TrimSpace(model), pickFrom, time.Now())
 	s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: strings.TrimSpace(chosen.ID), Provider: chosen.Provider})
-	s.authMu.Unlock()
 	return strings.TrimSpace(chosen.ID), true, nil
+}
+
+// highestPriorityAuths runs after permission and availability filtering. Priority
+// may be negative; zero is not a lower bound.
+func highestPriorityAuths(candidates []AuthPickCandidate) []AuthPickCandidate {
+	if len(candidates) == 0 {
+		return nil
+	}
+	priority := candidates[0].Priority
+	for _, candidate := range candidates[1:] {
+		if candidate.Priority > priority {
+			priority = candidate.Priority
+		}
+	}
+	out := make([]AuthPickCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Priority == priority {
+			out = append(out, candidate)
+		}
+	}
+	return out
 }
 
 // withoutErroredAuths returns the candidates the host did not flag as errored.
@@ -343,6 +324,9 @@ func (s *Service) filterAvailableAuthLocked(limits map[string]int64, candidates 
 	for _, candidate := range candidates {
 		limit := authConcurrencyLimitOf(limits, candidate)
 		provider, id := authLimitProvider(candidate.Provider), strings.TrimSpace(candidate.ID)
+		if provider == "" || id == "" || authStatusDisabled(candidate.Status) {
+			continue
+		}
 		if s.authWarmupBusyLocked(provider, id) {
 			hasWarmupHold = true
 			continue

@@ -128,7 +128,7 @@
                   <input id="keyModalQuotaUSD" type="number" step="0.01" min="0" placeholder="0 或留空 = 不限制"/>
                 </label>
                 <label>最大并发请求数
-                  <input id="keyModalMaxConcurrent" type="number" step="1" min="0" placeholder="0 或留空 = 不限制" title="并发按在途请求数计：最多 N 个请求由该 Key 自己的账号承载；兜底（API 提供商）请求不占用该额度，打满时自动溢出到兜底（若已启用）"/>
+                  <input id="keyModalMaxConcurrent" type="number" step="1" min="0" placeholder="0 或留空 = 不限制" title="0 或留空表示不限制。auth_only=true 时限制该 Key 的全部在途文本请求；旧执行模式保留原有并发记账规则。API 调度顺序由 priority 决定，不由执行期重放开关控制。"/>
                 </label>
                 <label id="keyModalTokenLimitsEnabledWrap" class="key-switch-field">模型 Token 限制
                   <span class="key-switch">
@@ -600,7 +600,7 @@
 
   <section id="tab-auth-quotas" class="tabpane hidden">
     <div class="page-intro">
-      <div><h2>认证额度</h2><p>每个认证按模型组显示当前 5 小时和配额窗口，短周期同样显示；可在卡片内切换历史周期，并设置最大并发。兜底（API 提供商）请求计入该提供商，不占用绑定账号的并发。</p></div>
+      <div><h2>认证额度</h2><p>每个认证按模型组显示当前 5 小时和配额窗口，短周期同样显示；可在卡片内切换历史周期，并设置最大并发。认证并发按实际服务的凭据计数。账号选择先过滤权限与可用性，再按 priority 高者优先；API 凭据也参与同一套调度。</p></div>
       <div class="auth-quota-toolbar">
         <div class="auth-quota-toolbar-filters">
           <label class="auth-quota-filter">
@@ -613,21 +613,21 @@
           </label>
         </div>
         <div class="auth-quota-switches">
-          <div class="auth-quota-switch" title="开启后同一会话在 TTL 内固定使用同一个已绑定账号；只在该 Key 的绑定账户内选择。立即生效，无需重启。">
-            <span class="auth-quota-switch-label">会话黏性（绑定 Key）</span>
+          <div class="auth-quota-switch" title="开启后同一会话在 TTL 内复用当前最高优先级池中的可用账号；先按 Key 权限、并发和预热过滤，黏性不能越过权限或优先级。立即生效，无需重启。">
+            <span class="auth-quota-switch-label">会话黏性（同优先级）</span>
             <div class="auth-quota-switch-row">
               <label class="key-switch">
-                <input id="authSessionAffinityEnabled" type="checkbox" role="switch" aria-label="会话黏性（绑定 Key）"/>
+                <input id="authSessionAffinityEnabled" type="checkbox" role="switch" aria-label="会话黏性（同优先级）"/>
                 <span class="key-switch-ui" aria-hidden="true"></span>
               </label>
               <span class="auth-quota-switch-state" id="authSessionAffinityState">读取中…</span>
             </div>
           </div>
-          <div class="auth-quota-switch" title="开启后，绑定 Key 的 OAuth 账号全部不可用时，改用本次请求候选中已有的 API 提供商继续服务；未绑定的 Key 不受影响。立即生效，无需重启。">
-            <span class="auth-quota-switch-label">API 兜底（绑定 Key）</span>
+          <div class="auth-quota-switch" title="仅控制 auth_only=false 时旧插件执行器的失败重放；auth_only=true 时不启用。不控制优先级调度，也不控制 Key 能否使用全局 API。">
+            <span class="auth-quota-switch-label">执行期 API 重放（旧模式）</span>
             <div class="auth-quota-switch-row">
               <label class="key-switch">
-                <input id="authFallbackEnabled" type="checkbox" role="switch" aria-label="API 兜底（绑定 Key）"/>
+                <input id="authFallbackEnabled" type="checkbox" role="switch" aria-label="执行期 API 重放（旧模式）" disabled/>
                 <span class="key-switch-ui" aria-hidden="true"></span>
               </label>
               <span class="auth-quota-switch-state" id="authFallbackState">读取中…</span>

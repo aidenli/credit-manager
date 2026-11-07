@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -13,32 +12,9 @@ import (
 	"github.com/yuluo688/credit-manager/internal/store"
 )
 
-// API-provider fallback for bound keys.
-//
-// A key that binds accounts fails closed when none of them can serve the
-// request. That is the right default, because a binding is an access boundary
-// rather than a scheduling hint. It does mean, however, that a codex quota
-// outage or a cooling credential turns into a hard failure for every key bound
-// to it. When the operator opts in, such a request is served by an API provider
-// (an "openai-compatible-*" provider such as a paid relay) instead.
-//
-// Scope: bound keys only. Unbound keys keep returning handled=false and stay
-// entirely with the host's own selector, where API providers already compete for
-// candidates on their own.
-//
-// The fallback may only ever return an account taken from the current scheduler
-// request. The host validates the returned auth id against that exact list
-// (CLIProxyAPI internal/pluginhost/scheduler.go normalizeSchedulerResponse and
-// sdk/cliproxy/auth/conductor_selection.go pickSchedulerAuthByID); an id outside
-// it is not reported as an error there. It silently degrades to handled=false and
-// lets the host's selector choose among the request's candidates, which for a
-// bound key means an arbitrary account the key was never granted. Never return a
-// remembered or configured id here.
-
-// authPickScopeFallback is the cursor scope for fallback rotation. It is a
-// dedicated scope so fallback picks never disturb the provider-wide cursor the
-// host-independent rotation uses.
-const authPickScopeFallback = "\x00fallback"
+// Legacy execution-time API replay settings and audit history. These settings
+// apply to the plugin executor (auth_only=false), not scheduler permissions or
+// priority. Scheduler decisions always use the host's current candidate list.
 
 // Fallback hits are persisted as audit events because the switch is otherwise
 // invisible: from the client's point of view the request simply succeeded, and
@@ -47,16 +23,6 @@ const authPickScopeFallback = "\x00fallback"
 // bill.
 const (
 	authFallbackEventType = "auth_fallback"
-	// authFallbackReasonNotOffered means the request never offered an account the
-	// key is bound to (cooldown, disabled, or the model does not route there).
-	authFallbackReasonNotOffered = "not_offered"
-	// authFallbackReasonBusy means the bound accounts were offered but all of them
-	// were at their concurrency cap or warmup-held.
-	authFallbackReasonBusy = "unavailable"
-	// authFallbackReasonKeyBusy means the key's own concurrency limit was already
-	// in flight. The bound attempt would have been rejected before it started, so
-	// the fallback keeps the request served instead of failing it.
-	authFallbackReasonKeyBusy = "key_busy"
 	// authFallbackRecentWindow is the window the console reports separately.
 	authFallbackRecentWindow = 24 * time.Hour
 )
@@ -318,61 +284,9 @@ func authServingProviderName(values ...string) string {
 	return ""
 }
 
-// pickFallbackAPIAuthLocked chooses the API provider that should serve a bound
-// key whose own accounts are all unavailable. It returns false when the fallback
-// is disabled, when the request offers no usable API provider, or when every
-// eligible one is at its concurrency cap or warmup-held, in which case the caller
-// fails closed exactly as before.
-//
-// Callers must hold authMu.
-func (s *Service) pickFallbackAPIAuthLocked(limits map[string]int64, candidates []AuthPickCandidate) (AuthPickCandidate, bool) {
-	if !s.authFallbackEnabled() {
-		return AuthPickCandidate{}, false
-	}
-	pool := make([]AuthPickCandidate, 0, len(candidates))
-	allowed := s.cfg.APIFallback.ProviderKeys()
-	for _, candidate := range candidates {
-		provider := authLimitProvider(candidate.Provider)
-		if !authProviderIsAPI(provider) || (len(s.cfg.APIFallback.Providers) > 0 && !slices.Contains(allowed, provider)) {
-			continue
-		}
-		if strings.TrimSpace(candidate.ID) == "" || authStatusDisabled(candidate.Status) {
-			continue
-		}
-		pool = append(pool, candidate)
-	}
-	if len(pool) == 0 {
-		return AuthPickCandidate{}, false
-	}
-	// The fallback is a shared account set, so it obeys the same concurrency and
-	// warmup rules as any other candidate instead of becoming a bypass for them.
-	available, _ := s.filterAvailableAuthLocked(limits, pool)
-	if len(available) == 0 {
-		return AuthPickCandidate{}, false
-	}
-	if len(s.cfg.APIFallback.Providers) == 0 {
-		return s.nextAuthPickLocked(authPickScopeFallback, available), true
-	}
-	priority := available[0].Priority
-	for _, candidate := range available[1:] {
-		if candidate.Priority > priority {
-			priority = candidate.Priority
-		}
-	}
-	pool = pool[:0]
-	for _, candidate := range available {
-		if candidate.Priority == priority {
-			pool = append(pool, candidate)
-		}
-	}
-	return s.nextAuthPickLocked(authPickScopeFallback, pool), true
-}
-
 // noBoundAuthError keeps the fail-closed sentinel but appends what the plugin
-// actually saw. The plugin has no logger of its own, so the host log line
-// "scheduler rejected auth pick" is the only diagnostic channel available, and
-// without these counters a declined fallback is indistinguishable from a
-// disabled one.
+// actually saw. Counts describe the offered candidates, not the legacy replay
+// toggle, which no longer grants or denies access to API scheduler candidates.
 func (s *Service) noBoundAuthError(candidates []AuthPickCandidate) error {
 	api, usable := 0, 0
 	providers := make([]string, 0, 4)
@@ -399,10 +313,6 @@ func (s *Service) noBoundAuthError(candidates []AuthPickCandidate) error {
 		providers = append(providers, fmt.Sprintf("%s:%d", provider, count))
 	}
 	sort.Strings(providers)
-	state := "enabled"
-	if !s.authFallbackEnabled() {
-		state = "disabled"
-	}
-	return fmt.Errorf("%w [fallback=%s candidates=%d api=%d usable=%d providers=%s]",
-		ErrNoBoundAuthAvailable, state, len(candidates), api, usable, strings.Join(providers, " "))
+	return fmt.Errorf("%w [policy=priority candidates=%d api=%d enabled_api=%d providers=%s]",
+		ErrNoBoundAuthAvailable, len(candidates), api, usable, strings.Join(providers, " "))
 }

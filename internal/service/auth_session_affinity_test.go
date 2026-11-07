@@ -236,6 +236,63 @@ func TestSessionAffinityIDPrecedence(t *testing.T) {
 	}
 }
 
+// Session affinity cannot retain a lower-priority credential when another
+// authorized credential becomes the highest available tier.
+func TestSessionAffinityCannotOverridePriority(t *testing.T) {
+	for _, scope := range []string{"bound", "unbound"} {
+		t.Run(scope, func(t *testing.T) {
+			s, key, headers := affinityService(t, true)
+			if scope == "bound" {
+				bindOneAccount(t, s, key.ID, "oauth")
+			}
+			session := sessionHeaders(headers, "session-priority")
+			candidates := []AuthPickCandidate{
+				{ID: "oauth", Provider: "codex", Priority: 1},
+				{ID: apiAccount1, Provider: apiProvider, Priority: 2},
+			}
+			// First pin API, then recover a higher OAuth tier, then lower it again.
+			for i, want := range []string{apiAccount1, "oauth", apiAccount1} {
+				if i == 1 {
+					candidates[0].Priority = 3
+				} else {
+					candidates[0].Priority = 1
+				}
+				id, handled, err := s.PickAuthForKey(context.Background(), session, candidates, "model")
+				if err != nil || !handled || id != want {
+					t.Fatalf("priority change %d = (%q, %t, %v), want %q", i, id, handled, err, want)
+				}
+			}
+		})
+	}
+}
+
+// A mixed pool needs a stable affinity namespace, not the first candidate's
+// provider: host candidate reordering must not silently create a second binding.
+func TestSessionAffinityIsStableAcrossMixedProviderCandidateOrder(t *testing.T) {
+	s, key, headers := affinityService(t, true)
+	bindOneAccount(t, s, key.ID, "bound")
+	candidates := []AuthPickCandidate{
+		{ID: "bound", Provider: "codex", Priority: 2},
+		{ID: apiAccount1, Provider: apiProvider, Priority: 2},
+	}
+	session := sessionHeaders(headers, "same-session")
+	first, handled, err := s.PickAuthForKey(context.Background(), session, candidates, "model")
+	if err != nil || !handled || first != "bound" {
+		t.Fatalf("first mixed pick = (%q, %t, %v)", first, handled, err)
+	}
+	reversed := []AuthPickCandidate{candidates[1], candidates[0]}
+	for range 3 {
+		id, handled, err := s.PickAuthForKey(context.Background(), session, reversed, "model")
+		if err != nil || !handled || id != first {
+			t.Fatalf("reordered same-session pick = (%q, %t, %v), want %q", id, handled, err, first)
+		}
+	}
+	id, handled, err := s.PickAuthForKey(context.Background(), sessionHeaders(headers, "another-session"), candidates, "model")
+	if err != nil || !handled || id != apiAccount1 {
+		t.Fatalf("new session must still rotate mixed credentials = (%q, %t, %v)", id, handled, err)
+	}
+}
+
 // The binding key must include model and provider, mirroring the host.
 func TestSessionAffinityKeyIncludesProviderAndModel(t *testing.T) {
 	if got, want := sessionAffinityKey("codex", "codex:s1", "gpt-5"), "codex::codex:s1::gpt-5"; got != want {
@@ -243,19 +300,19 @@ func TestSessionAffinityKeyIncludesProviderAndModel(t *testing.T) {
 	}
 }
 
-// Unbound keys must be untouched by the feature.
-func TestSessionAffinityDoesNotAffectUnboundKeys(t *testing.T) {
-	s := quotaService(t)
-	s.setSessionAffinityRuntime(true, time.Hour)
-	_, material, err := s.MintKeyWithPolicy(context.Background(), MintKeyRequest{Label: "unbound"})
-	if err != nil {
-		t.Fatal(err)
+// Unbound plugin keys keep affinity inside their highest global priority tier.
+func TestSessionAffinityPinsUnboundGlobalPool(t *testing.T) {
+	s, _, headers := affinityService(t, true)
+	candidates := []AuthPickCandidate{{ID: "account-1", Provider: "codex"}, {ID: apiAccount1, Provider: apiProvider}}
+	session := sessionHeaders(headers, "session-a")
+	for range 3 {
+		id, handled, err := s.PickAuthForKey(context.Background(), session, candidates, "gpt-5")
+		if err != nil || !handled || id != "account-1" {
+			t.Fatalf("unbound session pick = (%q, %t, %v)", id, handled, err)
+		}
 	}
-	headers := http.Header{}
-	headers.Set("Authorization", "Bearer "+material.Plaintext)
-	candidates := []AuthPickCandidate{{ID: "account-1", Provider: "codex"}, {ID: "account-2", Provider: "codex"}}
-	id, handled, err := s.PickAuthForKey(context.Background(), sessionHeaders(headers, "session-a"), candidates, "gpt-5")
-	if err != nil || handled || id != "" {
-		t.Fatalf("unbound key must defer to the host scheduler, got (%q, %t, %v)", id, handled, err)
+	id, handled, err := s.PickAuthForKey(context.Background(), sessionHeaders(headers, "session-b"), candidates, "gpt-5")
+	if err != nil || !handled || id != apiAccount1 {
+		t.Fatalf("unbound new-session rotation = (%q, %t, %v)", id, handled, err)
 	}
 }

@@ -150,8 +150,9 @@ type Config struct {
 	SessionAffinity SessionAffinityConfig `yaml:"session_affinity" json:"session_affinity"`
 	APIFallback     APIFallbackConfig     `yaml:"api_fallback" json:"api_fallback"`
 	// AuthOnly skips the plugin executor and model router so request bodies are
-	// never copied into the plugin. Only Key auth, account binding and the Key
-	// concurrency cap stay active; text billing, quotas and fallback are off.
+	// never copied into the plugin. Key auth, permission/priority scheduling,
+	// session affinity and the Key concurrency cap stay active. Text billing,
+	// quotas and legacy executor replay are off; native host retries remain active.
 	// Takes effect on CPA restart (registration is read once).
 	AuthOnly bool `yaml:"auth_only" json:"auth_only"`
 }

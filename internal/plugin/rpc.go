@@ -51,6 +51,7 @@ type registrationCapability struct {
 	RequestLifecyclePlugin           bool `json:"request_lifecycle_plugin"`
 	ResponseInterceptor              bool `json:"response_interceptor"`
 	Scheduler                        bool `json:"scheduler"`
+	SchedulerAcrossPriorities        bool `json:"scheduler_across_priorities,omitempty"`
 }
 
 type rpcModelRouteRequest struct {

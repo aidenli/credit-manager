@@ -145,11 +145,12 @@ func TestOAuthTestProbesEveryAccountConcurrently(t *testing.T) {
 	}
 	defer closeRelease()
 
+	reached := make(chan struct{})
 	executor := &fakeOAuthTestExecutor{
 		failOn:  "codex-b@example.com-pro.json",
 		block:   release,
 		barrier: 3,
-		reached: make(chan struct{}),
+		reached: reached,
 	}
 	s.SetOAuthTestExecutor(executor)
 
@@ -161,7 +162,7 @@ func TestOAuthTestProbesEveryAccountConcurrently(t *testing.T) {
 		t.Fatalf("started = %d, want one probe per OAuth account", started)
 	}
 	select {
-	case <-executor.reached:
+	case <-reached:
 	case <-time.After(3 * time.Second):
 		peak := executor.peak()
 		closeRelease()

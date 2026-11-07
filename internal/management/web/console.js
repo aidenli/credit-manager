@@ -66,7 +66,7 @@
     '汇率获取失败，已使用上次汇率': { 'zh-TW':'匯率取得失敗，已使用上次匯率', en:'Could not refresh the rate; using the last saved value', ru:'Не удалось обновить курс; используется прошлое значение' },
     '不限制': { 'zh-TW':'不限制', en:'Unlimited', ru:'Без ограничений' },
     '绑定账户': { 'zh-TW':'綁定帳戶', en:'Bound accounts', ru:'Привязанные аккаунты' },
-    '未绑定账号时由宿主调度选择账户': { 'zh-TW':'未綁定帳號時由宿主排程選擇帳戶', en:'Unbound: the host scheduler chooses the account', ru:'Без привязки аккаунт выбирает планировщик хоста' },
+    '未绑定账号时按全局候选优先级选择账户': { 'zh-TW':'未綁定帳號時按全域候選優先級選擇帳戶', en:'Unbound: select from global candidates by priority', ru:'Без привязки: выбор из глобальных кандидатов по приоритету' },
     '已用': { 'zh-TW':'已用', en:'Used', ru:'Использовано' }, '剩余': { 'zh-TW':'剩餘', en:'Remaining', ru:'Осталось' }, '限额': { 'zh-TW':'限額', en:'Cap', ru:'Лимит' },
     '同步': { 'zh-TW':'同步', en:'Synced', ru:'Синхр.' }, '最新': { 'zh-TW':'最新', en:'Fresh', ru:'Актуально' }, '缓存过期': { 'zh-TW':'快取過期', en:'Stale', ru:'Устарело' }, '不可用': { 'zh-TW':'不可用', en:'Unavailable', ru:'Недоступно' },
     '未命名认证': { 'zh-TW':'未命名認證', en:'Unnamed auth', ru:'Без имени' }, '未知提供商': { 'zh-TW':'未知供應商', en:'Unknown provider', ru:'Неизвестный провайдер' },
@@ -3554,7 +3554,7 @@
   function authBindingsCell(k) {
     const bindings = Array.isArray(k.auth_bindings) ? k.auth_bindings : [];
     if (!bindings.length) {
-      return '<div class="key-bindings"><span class="key-bindings-none" title="'+esc(t('未绑定账号时由宿主调度选择账户'))+'">'+esc(t('不限制'))+'</span></div>';
+      return '<div class="key-bindings"><span class="key-bindings-none" title="'+esc(t('未绑定账号时按全局候选优先级选择账户'))+'">'+esc(t('不限制'))+'</span></div>';
     }
     return '<div class="key-bindings">' + bindings.map(binding => {
       const full = [binding.provider, binding.auth_id].filter(Boolean).join(' · ');
@@ -6132,7 +6132,7 @@
     return raw;
   }
 
-  // Session affinity for bound keys. Global toggle; applies to the next request
+  // Session affinity within the permitted highest-priority pool. Applies to the next request
   // without a host restart because the plugin reads it from the database.
   function applySessionAffinitySettings(settings) {
     const enabled = !!(settings && settings.enabled);
@@ -6184,22 +6184,22 @@
     }
   }
 
-  // API-provider fallback for bound keys. Global toggle; only a key whose own
-  // bound accounts are all unusable is affected, and only an API provider that
-  // the host already offered for that same request can serve it.
+  // Legacy executor replay only. Scheduling ignores this toggle and its allowlist.
   function applyAuthFallbackSettings(settings) {
     const enabled = !!(settings && settings.enabled);
+    const authOnly = !!(settings && settings.auth_only);
     const toggle = $('authFallbackEnabled');
     if (toggle) {
       toggle.checked = enabled;
-      toggle.disabled = false;
+      toggle.dataset.authOnly = String(authOnly);
+      toggle.disabled = authOnly;
     }
     const total = Number((settings && settings.hits_total) || 0);
     const recent = Number((settings && settings.hits_24h) || 0);
     const last = (settings && settings.last_hit) || null;
     const stateEl = $('authFallbackState');
     if (stateEl) {
-      let text = enabled ? t('已开启') : t('已关闭');
+      let text = authOnly ? '当前 auth_only 模式不启用' : (enabled ? t('已开启') : t('已关闭'));
       // Show the count whenever the feature is on, so "no hits yet" is readable
       // instead of looking like the counter is missing.
       if (enabled || total > 0) {
@@ -6208,15 +6208,16 @@
       }
       stateEl.textContent = text;
       const lines = [];
-      lines.push(enabled ? t('绑定 Key 的账号不可用时改用 API 提供商') : t('API 兜底已关闭'));
-      lines.push(t('只在请求候选里已有 API 提供商时生效（如 agnes），且优先用完绑定账号'));
+      lines.push('仅控制 auth_only=false 时插件执行器失败后的 API 重放；不控制账号调度。');
+      lines.push('调度始终按权限、可用性和 priority 选择；API 不受此开关或旧白名单限制。');
+      lines.push('计数保留历史切换事件，不代表全部 API 调度请求。');
       if (last) {
         const who = last.label || last.plugin_key_id || '-';
         const where = [last.provider, last.model].filter(Boolean).join(' / ');
         lines.push(t('最近一次') + '：' + who + (where ? ' → ' + where : '') + (last.at ? ' · ' + last.at : ''));
       }
       stateEl.title = lines.join('\n');
-      stateEl.classList.toggle('is-on', enabled);
+      stateEl.classList.toggle('is-on', enabled && !authOnly);
     }
   }
 
@@ -6235,17 +6236,18 @@
   async function saveAuthFallbackSettings(enabled) {
     const toggle = $('authFallbackEnabled');
     const stateEl = $('authFallbackState');
+    if (toggle && toggle.dataset.authOnly === 'true') return;
     if (toggle) toggle.disabled = true;
     if (stateEl) stateEl.textContent = '保存中…';
     try {
       applyAuthFallbackSettings(await api('POST', 'credit-manager/auth-quotas/fallback', { enabled }));
-      flash(enabled ? 'API 兜底已开启' : 'API 兜底已关闭', true);
+      flash(enabled ? '执行期 API 重放设置已开启' : '执行期 API 重放设置已关闭', true);
     } catch (e) {
       if (toggle) toggle.checked = !enabled;
       if (stateEl) stateEl.textContent = '保存失败：' + e.message;
-      flash('API 兜底设置保存失败：' + e.message, false);
+      flash('执行期 API 重放设置保存失败：' + e.message, false);
     } finally {
-      if (toggle) toggle.disabled = false;
+      if (toggle) toggle.disabled = toggle.dataset.authOnly === 'true';
     }
   }
 

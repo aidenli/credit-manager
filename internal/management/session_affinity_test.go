@@ -147,7 +147,7 @@ func TestConsoleExposesSessionAffinityToggle(t *testing.T) {
 		"function loadSessionAffinitySettings",
 		"function saveSessionAffinitySettings",
 		"credit-manager/auth-quotas/session-affinity",
-		"会话黏性（绑定 Key）",
+		"会话黏性（同优先级）",
 	} {
 		if !strings.Contains(page, text) {
 			t.Fatalf("console is missing the session affinity toggle: %q", text)
