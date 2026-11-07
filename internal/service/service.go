@@ -17,7 +17,7 @@ import (
 const (
 	PluginID      = "credit-manager"
 	PluginName    = "CPA Credit Manager"
-	PluginVersion = "1.8.33"
+	PluginVersion = "1.8.34"
 	// CallerScopeMetadataKey mirrors sdk/cliproxy/executor.CallerScopeMetadataKey.
 	CallerScopeMetadataKey = "caller_scope"
 )
@@ -44,10 +44,12 @@ type Service struct {
 	warmupSems         map[string]chan struct{}
 	warmupSemLimit     int
 	oauthTest          oauthTestRuntime
-	authPickCursor     map[string]int
+	// authWeightedPick holds smooth weighted round-robin accumulators per pick
+	// scope. Guarded by authMu (shared across reconfigure).
+	authWeightedPick map[string]*weightedPickState
 	// sessionAffinity maps a session key to the bound account so a session keeps
 	// hitting the same OAuth account. Guarded by authMu (shared across
-	// reconfigure), like authPickCursor.
+	// reconfigure), like authWeightedPick.
 	sessionAffinity map[string]sessionBinding
 	// sessionAffinityState caches the effective toggle for the hot path; the
 	// mutex only guards the one-time/miss load from the database.

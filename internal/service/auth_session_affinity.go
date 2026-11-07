@@ -281,9 +281,9 @@ func (s *Service) chooseBoundAuthLocked(keyScope, provider, sessionID, model str
 			return bound
 		}
 		// First pick for this session: rotate with the shared cursor, then bind.
-		chosen := s.nextAuthPickLocked(authPickScopeAffinity, available)
+		chosen := s.nextWeightedAuthPickLocked(authPickScopeAffinity, available)
 		s.bindSessionAffinityLocked(key, authLimitProvider(chosen.Provider), chosen.ID, now)
 		return chosen
 	}
-	return s.nextAuthPickLocked(keyScope, available)
+	return s.nextWeightedAuthPickLocked(keyScope, available)
 }

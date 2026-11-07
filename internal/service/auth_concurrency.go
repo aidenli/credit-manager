@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,56 @@ type AuthPickCandidate struct {
 	// Status is the host-visible lifecycle state (unknown, active, pending,
 	// refreshing, error, disabled).
 	Status string
+	// Weight is the host credential weight inside its priority tier, as returned
+	// by ParseAuthWeight. 0 means unspecified (the default weight 1); a negative
+	// value means the host weight excludes the credential from selection.
+	Weight int64
+}
+
+// effectiveAuthWeight returns the weight used for smooth weighted rotation;
+// 0 means the credential must not be selected.
+func effectiveAuthWeight(candidate AuthPickCandidate) int64 {
+	switch {
+	case candidate.Weight == 0:
+		return DefaultAuthWeight
+	case candidate.Weight < 0:
+		return 0
+	default:
+		return candidate.Weight
+	}
+}
+
+// positiveWeightAuths drops candidates whose host weight excludes them.
+func positiveWeightAuths(candidates []AuthPickCandidate) []AuthPickCandidate {
+	out := make([]AuthPickCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if effectiveAuthWeight(candidate) > 0 {
+			out = append(out, candidate)
+		}
+	}
+	return out
+}
+
+const (
+	// DefaultAuthWeight and MaxAuthWeight mirror the host's credentialweight
+	// package: a missing weight counts as 1, the upper bound keeps arithmetic safe.
+	DefaultAuthWeight int64 = 1
+	MaxAuthWeight     int64 = 1_000_000
+)
+
+// ParseAuthWeight normalizes a host credential weight attribute the way the host's
+// own weighted selector does: empty means the default weight, while invalid,
+// non-positive or out-of-range values return -1 so the credential is never selected.
+func ParseAuthWeight(raw string) int64 {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return DefaultAuthWeight
+	}
+	weight, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || weight <= 0 || weight > MaxAuthWeight {
+		return -1
+	}
+	return weight
 }
 
 // authStatusDisabled reports whether the host explicitly disabled this credential.
@@ -189,7 +240,11 @@ func (s *Service) PickAuth(ctx context.Context, candidates []AuthPickCandidate) 
 	if len(available) == 0 {
 		return "", true, store.ErrConcurrentLimit
 	}
-	chosen := s.nextAuthPickLocked("global", highestPriorityAuths(available))
+	tier := positiveWeightAuths(highestPriorityAuths(available))
+	if len(tier) == 0 {
+		return "", true, store.ErrConcurrentLimit
+	}
+	chosen := s.nextWeightedAuthPickLocked("global", tier)
 	s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: strings.TrimSpace(chosen.ID), Provider: chosen.Provider})
 	return strings.TrimSpace(chosen.ID), true, nil
 }
@@ -265,7 +320,16 @@ func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candi
 		}
 		return "", true, s.noBoundAuthError(candidates)
 	}
-	available = highestPriorityAuths(available)
+	// Weight only orders credentials inside the highest tier, like the host's
+	// weighted selector: a tier whose weights are all non-positive fails rather
+	// than promoting a lower-priority credential.
+	available = positiveWeightAuths(highestPriorityAuths(available))
+	if len(available) == 0 {
+		if len(bindings) == 0 {
+			return "", true, store.ErrConcurrentLimit
+		}
+		return "", true, s.noBoundAuthError(candidates)
+	}
 	// A stable mixed-provider namespace keeps affinity independent of candidate
 	// ordering. Lookup only sees the authorized, available highest-priority tier.
 	const provider = "mixed"
@@ -414,14 +478,25 @@ func (s *Service) bindOldestUnattributedLocked(auth store.AuthIdentity) {
 // what spreads sessions across accounts.
 const authPickScopeAffinity = "\x00affinity"
 
-// nextAuthPickLocked round-robins inside one cursor scope.
-//
-// An empty scope keeps the previous semantics: the provider-wide cursor, which
-// callers that already scoped by key pass explicitly.
-func (s *Service) nextAuthPickLocked(scope string, available []AuthPickCandidate) AuthPickCandidate {
-	if s.authPickCursor == nil {
-		s.authPickCursor = map[string]int{}
-	}
+// maxWeightedPickStateEntries bounds one accumulator map so credentials removed
+// for good cannot leak entries; it matches the host's smooth-weighted bound.
+const maxWeightedPickStateEntries = 1024
+
+// weightedPickState is the smooth weighted round-robin accumulator of one scope.
+type weightedPickState struct {
+	current map[string]int64
+	weights map[string]int64
+}
+
+// nextWeightedAuthPickLocked runs smooth weighted round-robin (the host's
+// weighted-round-robin algorithm) inside one scope. Every candidate gains its
+// weight, the largest accumulator wins and pays back the round's total weight.
+// Accumulators reset only when a credential's weight actually changes, never
+// when the candidate set merely shrinks (retry exclusions, concurrency caps),
+// because resetting there would collapse selection onto the first candidate.
+// Equal weights reduce to plain alternation. Callers must hold authMu and pass
+// only positive-weight candidates.
+func (s *Service) nextWeightedAuthPickLocked(scope string, available []AuthPickCandidate) AuthPickCandidate {
 	key := scope
 	switch key {
 	case authPickScopeAffinity:
@@ -432,9 +507,62 @@ func (s *Service) nextAuthPickLocked(scope string, available []AuthPickCandidate
 	if key == "" {
 		key = "auth"
 	}
-	i := s.authPickCursor[key] % len(available)
-	s.authPickCursor[key] = i + 1
-	return available[i]
+	if s.authWeightedPick == nil {
+		s.authWeightedPick = map[string]*weightedPickState{}
+	}
+	state := s.authWeightedPick[key]
+	if state == nil {
+		state = &weightedPickState{current: map[string]int64{}, weights: map[string]int64{}}
+		s.authWeightedPick[key] = state
+	}
+	weights := make(map[string]int64, len(available))
+	for _, candidate := range available {
+		weights[weightedPickID(candidate)] = effectiveAuthWeight(candidate)
+	}
+	for id, weight := range weights {
+		if previous, ok := state.weights[id]; ok && previous != weight {
+			state.current = map[string]int64{}
+			break
+		}
+	}
+	for id, weight := range weights {
+		state.weights[id] = weight
+	}
+	if len(state.current) > maxWeightedPickStateEntries || len(state.weights) > maxWeightedPickStateEntries {
+		for id := range state.current {
+			if _, ok := weights[id]; !ok {
+				delete(state.current, id)
+			}
+		}
+		for id := range state.weights {
+			if _, ok := weights[id]; !ok {
+				delete(state.weights, id)
+			}
+		}
+	}
+	picked := -1
+	var total int64
+	for i, candidate := range available {
+		id := weightedPickID(candidate)
+		weight := weights[id]
+		if weight <= 0 {
+			continue
+		}
+		state.current[id] += weight
+		total += weight
+		if picked < 0 || state.current[id] > state.current[weightedPickID(available[picked])] {
+			picked = i
+		}
+	}
+	if picked < 0 {
+		return AuthPickCandidate{}
+	}
+	state.current[weightedPickID(available[picked])] -= total
+	return available[picked]
+}
+
+func weightedPickID(candidate AuthPickCandidate) string {
+	return authLimitProvider(candidate.Provider) + "\x00" + strings.TrimSpace(candidate.ID)
 }
 
 func (s *Service) activeAuthRequestsLocked(provider, authID, exceptReservation string) int64 {
