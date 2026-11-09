@@ -260,6 +260,24 @@ func (s *Service) PickAuth(ctx context.Context, candidates []AuthPickCandidate) 
 // host's provider::session::model cache key); selection itself is model-agnostic
 // because the host has already filtered candidates by model.
 func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candidates []AuthPickCandidate, model string) (authID string, handled bool, err error) {
+	return s.pickAuthForKey(ctx, headers, candidates, model, nil)
+}
+
+// PickAuthForKeyWithDecision returns optional metadata, never writes logs under authMu.
+// A nil decision means monitoring is off or this was not a plugin-key selection.
+func (s *Service) PickAuthForKeyWithDecision(ctx context.Context, headers http.Header, candidates []AuthPickCandidate, model string) (string, bool, *SessionRoutingDecision, error) {
+	var decision *SessionRoutingDecision
+	if s != nil && s.cfg.SessionAffinity.LogDecisions {
+		decision = &SessionRoutingDecision{}
+	}
+	id, handled, err := s.pickAuthForKey(ctx, headers, candidates, model, decision)
+	if decision != nil && decision.Epoch == "" {
+		decision = nil
+	}
+	return id, handled, decision, err
+}
+
+func (s *Service) pickAuthForKey(ctx context.Context, headers http.Header, candidates []AuthPickCandidate, model string, decision *SessionRoutingDecision) (authID string, handled bool, err error) {
 	if s == nil {
 		return "", false, nil
 	}
@@ -343,7 +361,11 @@ func (s *Service) PickAuthForKey(ctx context.Context, headers http.Header, candi
 	if healthy := withoutErroredAuths(available); len(healthy) > 0 {
 		pickFrom = healthy
 	}
-	chosen := s.chooseBoundAuthLocked(key.ID+"\x00"+provider, provider, sessionID, strings.TrimSpace(model), pickFrom, time.Now())
+	now := time.Now()
+	chosen, reason := s.chooseBoundAuthLocked(key.ID+"\x00"+provider, provider, sessionID, strings.TrimSpace(model), pickFrom, now)
+	if decision != nil {
+		s.captureSessionRoutingDecisionLocked(decision, ctx, headers, key.ID, model, reason, chosen, pickFrom, now)
+	}
 	s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: strings.TrimSpace(chosen.ID), Provider: chosen.Provider})
 	return strings.TrimSpace(chosen.ID), true, nil
 }

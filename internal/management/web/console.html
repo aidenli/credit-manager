@@ -369,6 +369,7 @@
             <option value="gemini">gemini</option>
             <option value="responses">responses</option>
             <option value="reserved_fallback">reserved_fallback</option>
+            <option value="statistics">statistics（仅统计，不扣费）</option>
           </select>
         </label>
       </div>
@@ -378,6 +379,7 @@
       </div>
     </div>
     <div class="grid stats" id="overviewStats"></div>
+    <p class="hint">用量记录数不等于精确请求数；用量费用按实际 Token 与已配置价格计算，仅供统计，不扣减余额或更新密钥已用额度。Magpie 免费（0）；未配置价格会单独标注，历史已结算账本保持不变。</p>
     <div class="overview-dashboard">
       <div class="overview-trends-column">
         <div class="card overview-trend-card">
@@ -394,8 +396,8 @@
         </div>
         <div class="card overview-trend-card">
           <div class="section-heading">
-            <div><h2 class="panel-title"><span class="heading-icon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v6M6.2 6.3h3.6M6.2 9.7h3.6"/></svg></span>费用趋势</h2><p class="hint" id="overviewCostTrendHint">按日汇总实际费用</p></div>
-            <div class="unit-switch trend-grain-switch" data-trend-chart="cost" role="group" aria-label="费用趋势时间维度">
+            <div><h2 class="panel-title"><span class="heading-icon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v6M6.2 6.3h3.6M6.2 9.7h3.6"/></svg></span>用量费用趋势</h2><p class="hint" id="overviewCostTrendHint">按日汇总用量费用</p></div>
+            <div class="unit-switch trend-grain-switch" data-trend-chart="cost" role="group" aria-label="用量费用趋势时间维度">
               <button type="button" data-trend-grain="hour">时</button>
               <button type="button" data-trend-grain="day" class="active">日</button>
               <button type="button" data-trend-grain="month">月</button>
@@ -410,9 +412,9 @@
           <div><h2 class="panel-title"><span class="heading-icon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.6"/><path fill="currentColor" stroke="none" d="M8 8V2.4A5.6 5.6 0 0 1 13.4 10.4Z"/></svg></span>模型调用占比</h2><p class="hint">点击区块或模型名称下钻</p></div>
           <div class="overview-model-tools">
             <div class="unit-switch" id="modelShareMetricSwitch" role="group" aria-label="模型占比指标">
-              <button type="button" data-model-metric="requests" class="active">调用次数</button>
+              <button type="button" data-model-metric="requests" class="active">用量记录数</button>
               <button type="button" data-model-metric="tokens">Token</button>
-              <button type="button" data-model-metric="cost">费用</button>
+              <button type="button" data-model-metric="cost">用量费用</button>
             </div>
             <span class="muted" id="overviewModelCount" hidden></span>
           </div>
@@ -525,6 +527,7 @@
             <option value="gemini">gemini</option>
             <option value="responses">responses</option>
             <option value="reserved_fallback">reserved_fallback</option>
+            <option value="statistics">statistics（仅统计，不扣费）</option>
           </select>
         </label>
         <label>兜底
@@ -534,10 +537,10 @@
             <option value="0">仅绑定账号</option>
           </select>
         </label>
-        <label>最低费用（USD）
+        <label>最低用量费用（USD）
           <input id="usageMinCost" type="number" min="0" step="0.000001" placeholder="例如 0.01"/>
         </label>
-        <label>最高费用（USD）
+        <label>最高用量费用（USD）
           <input id="usageMaxCost" type="number" min="0" step="0.000001" placeholder="不限制"/>
         </label>
         <label>最低 Token 数
@@ -552,6 +555,8 @@
         <button class="btn ghost" id="btnClearUsageFilters">清除筛选</button>
       </div>
     </div>
+    <p class="hint">用量记录数不等于精确请求数；用量费用按实际 Token 与已配置价格计算，仅供统计，不扣减余额或更新密钥已用额度。Magpie 免费（0）；未配置价格会单独标注，历史已结算账本保持不变。</p>
+    <p class="hint" id="usageStatisticsStatus" role="status" aria-live="polite"></p>
     <div class="grid stats" id="usageStats"></div>
     <div class="usage-grid">
     <div class="card">

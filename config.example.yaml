@@ -34,7 +34,13 @@ stream:
   max_buffer_bytes: 4194304
   stale_reservation_timeout: 2h
 
-# 保留轻量鉴权/调度模式；true 不注册插件模型路由与执行器，false 保留旧执行模式。
+# 轻量鉴权/调度 + 独立统计模式：true 不注册模型路由、执行器、通用响应拦截器。
+# 所有请求（含图片）不预扣、不冻结、不结算；只统计宿主 Usage 事件，不读取正常正文。
+# Token / Key / 模型 / 日期汇总可用，费用仅参考；记录数不等于客户端请求数。
+# 统计缓冲最多 512 条、批量 64 条，每 250ms 刷新；溢出或写入失败不重试，管理页显示计数。
+# 不保存错误正文/响应头；宿主 ABI 可能在到达插件前复制错误正文，插件无法消除该开销。
+# 宿主须支持 schema >= 7 才能省略认证/请求正文；通用响应模型列表过滤在此模式关闭。
+# false 保留旧执行/计费模式。启用前请备份数据库，新增统计不会回填历史缺失事件。
 # 切换模式需重新加载插件注册能力。无论哪种模式，调度均按权限→可用性→最高 priority 选择，
 # 不依赖下方 api_fallback 或旧执行期重放开关。绑定 Key 允许自己的 OAuth + 全局 API；无绑定为全局候选。
 auth_only: false
@@ -42,13 +48,18 @@ auth_only: false
 # 插件会话黏性（默认关闭，保持按请求轮询）。
 # 开启后，同一会话在 TTL 内复用权限/可用性过滤后的最高优先级池中的账号；
 # 黏性不会越过 Key 权限，也不会把会话固定在低于当前可用最高 priority 的账号上。
-# 会话标识取自请求头，优先级与宿主 routing.session-affinity 一致：
+# 优先使用宿主 canonical_session_id，其次 derived_session_id；均缺失才取请求头：
 #   X-Claude-Code-Session-Id > Session-Id / Session_id > X-Session-ID > X-Session-Affinity > X-Client-Request-Id
 # 缺少会话标识时按同级轮询；账号不可用（并发上限、warmup 占用、被移出候选）时重新选择并绑定。
 # 插件处理账号选择时宿主的会话黏性不参与，因此需要亲和时请在插件这里开启。
 session_affinity:
   enabled: false
   ttl: 1h
+  # 默认关闭。true 通过宿主 info 日志输出 credit-manager session-routing + 单行 JSON。
+  # 记录 new_binding / affinity_hit / expired_rebind / unavailable_rebind / no_session / affinity_disabled。
+  # 只记录脱敏标识、最终候选池及权重，不记录正文/密钥；每次成功调度一条，排错后建议关闭。
+  # 详细字段、比例统计口径与 Harness 会话识别说明见 docs/session-routing-monitor.md。
+  log_decisions: false
 
 # 仅 auth_only=false 的旧 API 执行期重放：OAuth 失败（429、408、5xx、限流、流内 overload /
 # usage_limit / 加密推理校验失败等）且还没有向客户端输出正文时，插件用同一请求改发到这里。

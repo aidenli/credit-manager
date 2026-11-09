@@ -33,6 +33,8 @@ type UsageEntry struct {
 	PricingRuleID         *string
 	Usage                 money.TokenUsage
 	CostMicroUSD          money.MicroUSD
+	UsageCostMicroUSD     money.MicroUSD `json:"usage_cost_micro_usd"` // Display-only; CostMicroUSD remains financial spend.
+	UsageCostStatus       string         `json:"usage_cost_status"`
 	EstimatedCostMicroUSD money.MicroUSD
 	Source                string
 	Auth                  AuthIdentity
@@ -326,7 +328,8 @@ func (s *Store) GetUsage(ctx context.Context, ledgerID string) (UsageEntry, erro
 	if ledgerID == "" {
 		return UsageEntry{}, fmt.Errorf("%w: usage ledger id is required", ErrInvalidArgument)
 	}
-	entries, err := s.ListUsage(ctx, UsageFilter{LedgerID: ledgerID, Limit: 1})
+	// Repricing callers must never resolve an independent statistics row.
+	entries, err := s.listUsage(ctx, UsageFilter{LedgerID: ledgerID, Limit: 1}, "usage_ledger")
 	if err != nil {
 		return UsageEntry{}, err
 	}
@@ -337,6 +340,11 @@ func (s *Store) GetUsage(ctx context.Context, ledgerID string) (UsageEntry, erro
 }
 
 func (s *Store) ListUsage(ctx context.Context, filter UsageFilter) ([]UsageEntry, error) {
+	return s.listUsage(ctx, filter, "usage_reporting")
+}
+
+// table is an internal constant, never caller input.
+func (s *Store) listUsage(ctx context.Context, filter UsageFilter, table string) ([]UsageEntry, error) {
 	limit := filter.Limit
 	if limit <= 0 {
 		limit = 100
@@ -344,13 +352,13 @@ func (s *Store) ListUsage(ctx context.Context, filter UsageFilter) ([]UsageEntry
 	query := `SELECT u.id, u.reservation_id, u.caller_id, u.plugin_key_id,
 		COALESCE(u.executor_type, ''), u.model, u.pricing_rule_id,
 		u.input_tokens, u.output_tokens, u.reasoning_tokens, u.cached_tokens, u.cache_read_tokens,
-		u.cache_creation_tokens, u.total_tokens, u.cost_micro_usd, COALESCE(u.estimated_cost_micro_usd, u.cost_micro_usd, 0), u.source, u.tier, u.result, u.first_token_latency_ms,
+		u.cache_creation_tokens, u.total_tokens, u.cost_micro_usd, COALESCE(u.estimated_cost_micro_usd, u.cost_micro_usd, 0), ` + usageCostSQL("u.") + `, u.source, u.tier, u.result, u.first_token_latency_ms,
 		u.generation_duration_ms, u.tokens_per_second, u.thinking_intensity,
 		COALESCE(u.auth_id, ''), COALESCE(u.auth_index, ''), COALESCE(u.auth_name, ''), COALESCE(u.auth_label, ''),
 		COALESCE(u.auth_provider, ''), COALESCE(u.auth_type, ''), COALESCE(u.auth_email, ''), COALESCE(u.auth_path, ''),
 		u.served_api, COALESCE(u.served_provider, ''),
 		u.created_at_unix_ms, COALESCE(k.label, '')
-		FROM usage_ledger u LEFT JOIN plugin_keys k ON k.id = u.plugin_key_id`
+		FROM ` + table + ` u LEFT JOIN plugin_keys k ON k.id = u.plugin_key_id`
 	where, args := usageWhere(filter, "u")
 	if where != "" {
 		query += ` WHERE ` + where
@@ -373,7 +381,7 @@ func (s *Store) ListUsage(ctx context.Context, filter UsageFilter) ([]UsageEntry
 		var tier, resultLabel, thinkingIntensity sql.NullString
 		if err := rows.Scan(&entry.ID, &entry.ReservationID, &entry.CallerID, &entry.PluginKeyID,
 			&entry.ExecutorType, &entry.Model, &pricing, &entry.Usage.Input, &entry.Usage.Output, &entry.Usage.Reasoning, &entry.Usage.Cached,
-			&entry.Usage.CacheRead, &entry.Usage.CacheCreation, &entry.Usage.ReportedTotal, &entry.CostMicroUSD, &entry.EstimatedCostMicroUSD, &entry.Source, &tier,
+			&entry.Usage.CacheRead, &entry.Usage.CacheCreation, &entry.Usage.ReportedTotal, &entry.CostMicroUSD, &entry.EstimatedCostMicroUSD, &entry.UsageCostMicroUSD, &entry.Source, &tier,
 			&resultLabel, &firstTokenLatency, &generationDuration, &tokensPerSecond, &thinkingIntensity,
 			&entry.Auth.AuthID, &entry.Auth.AuthIndex, &entry.Auth.Name, &entry.Auth.Label,
 			&entry.Auth.Provider, &entry.Auth.Type, &entry.Auth.Email, &entry.Auth.Path,
@@ -410,6 +418,18 @@ func (s *Store) ListUsage(ctx context.Context, filter UsageFilter) ([]UsageEntry
 			value := tokensPerSecond.Float64
 			entry.Metrics.TokensPerSecond = &value
 		}
+		entry.UsageCostStatus = "settled"
+		if entry.Source == "statistics" {
+			switch {
+			case strings.EqualFold(strings.TrimSpace(entry.ServedProvider), "magpie"),
+				strings.EqualFold(strings.TrimSpace(entry.Auth.Provider), "openai-compatible-magpie"):
+				entry.UsageCostStatus = "free"
+			case entry.PricingRuleID == nil:
+				entry.UsageCostStatus = "unpriced"
+			default:
+				entry.UsageCostStatus = "priced"
+			}
+		}
 		entry.CreatedAt = fromUnixMilli(created)
 		out = append(out, entry)
 	}
@@ -418,7 +438,7 @@ func (s *Store) ListUsage(ctx context.Context, filter UsageFilter) ([]UsageEntry
 
 func (s *Store) CountUsage(ctx context.Context, filter UsageFilter) (int64, error) {
 	where, args := usageWhere(filter, "u")
-	query := `SELECT COUNT(1) FROM usage_ledger u`
+	query := `SELECT COUNT(1) FROM usage_reporting u`
 	if where != "" {
 		query += ` WHERE ` + where
 	}
@@ -456,6 +476,21 @@ func usageReportedTotalSQL(prefix string) string {
 		prefix + "input_tokens + " + prefix + "output_tokens + " + prefix + "reasoning_tokens) > 0 THEN (" +
 		prefix + "input_tokens + " + prefix + "output_tokens + " + prefix + "reasoning_tokens) ELSE " +
 		prefix + "cached_tokens END"
+}
+
+// These expressions are shared by reporting reads and filters, including ledger-only reads.
+func usageMagpieSQL(prefix string) string {
+	return "(LOWER(TRIM(" + prefix + "served_provider)) = 'magpie' OR LOWER(TRIM(" + prefix + "auth_provider)) = 'openai-compatible-magpie')"
+}
+
+func usageCostSQL(prefix string) string {
+	return "CASE WHEN " + prefix + "source = 'statistics' THEN CASE WHEN " + usageMagpieSQL(prefix) +
+		" THEN 0 ELSE COALESCE(" + prefix + "estimated_cost_micro_usd, 0) END ELSE " + prefix + "cost_micro_usd END"
+}
+
+func usageUnpricedSQL(prefix string) string {
+	return "CASE WHEN " + prefix + "source = 'statistics' AND " + prefix + "pricing_rule_id IS NULL THEN CASE WHEN " +
+		usageMagpieSQL(prefix) + " THEN 0 ELSE 1 END ELSE 0 END"
 }
 
 func usageWhere(filter UsageFilter, alias string) (string, []any) {
@@ -517,11 +552,11 @@ func usageWhere(filter UsageFilter, alias string) (string, []any) {
 		args = append(args, filter.To.UTC().UnixMilli())
 	}
 	if filter.MinCostMicroUSD != nil {
-		conds = append(conds, prefix+"cost_micro_usd >= ?")
+		conds = append(conds, usageCostSQL(prefix)+" >= ?")
 		args = append(args, int64(*filter.MinCostMicroUSD))
 	}
 	if filter.MaxCostMicroUSD != nil {
-		conds = append(conds, prefix+"cost_micro_usd <= ?")
+		conds = append(conds, usageCostSQL(prefix)+" <= ?")
 		args = append(args, int64(*filter.MaxCostMicroUSD))
 	}
 	totalTokens := usageReportedTotalSQL(prefix)
@@ -544,10 +579,12 @@ type UsageKeySummary struct {
 	Label        string `json:"label"`
 	RequestCount int64  `json:"request_count"`
 	// FallbackCount is how many of RequestCount an API provider served.
-	FallbackCount int64          `json:"fallback_count"`
-	CostMicroUSD  money.MicroUSD `json:"cost_micro_usd"`
-	InputTokens   int64          `json:"input_tokens"`
-	OutputTokens  int64          `json:"output_tokens"`
+	FallbackCount     int64          `json:"fallback_count"`
+	CostMicroUSD      money.MicroUSD `json:"cost_micro_usd"`
+	UsageCostMicroUSD money.MicroUSD `json:"usage_cost_micro_usd"`
+	UnpricedCount     int64          `json:"unpriced_count"`
+	InputTokens       int64          `json:"input_tokens"`
+	OutputTokens      int64          `json:"output_tokens"`
 }
 
 type UsageModelSummary struct {
@@ -556,6 +593,8 @@ type UsageModelSummary struct {
 	// FallbackCount is how many of RequestCount an API provider served.
 	FallbackCount      int64          `json:"fallback_count"`
 	CostMicroUSD       money.MicroUSD `json:"cost_micro_usd"`
+	UsageCostMicroUSD  money.MicroUSD `json:"usage_cost_micro_usd"`
+	UnpricedCount      int64          `json:"unpriced_count"`
 	InputTokens        int64          `json:"input_tokens"`
 	OutputTokens       int64          `json:"output_tokens"`
 	TotalTokens        int64          `json:"total_tokens"`
@@ -572,12 +611,16 @@ type UsageDailySummary struct {
 	CacheReadTokens     int64          `json:"cache_read_tokens"`
 	CacheCreationTokens int64          `json:"cache_creation_tokens"`
 	CostMicroUSD        money.MicroUSD `json:"cost_micro_usd"`
+	UsageCostMicroUSD   money.MicroUSD `json:"usage_cost_micro_usd"`
+	UnpricedCount       int64          `json:"unpriced_count"`
 }
 
 type UsageOverviewSummary struct {
 	RequestCount          int64          `json:"request_count"`
 	TotalTokens           int64          `json:"total_tokens"`
 	EstimatedCostMicroUSD money.MicroUSD `json:"estimated_cost_micro_usd"`
+	UsageCostMicroUSD     money.MicroUSD `json:"usage_cost_micro_usd"`
+	UnpricedCount         int64          `json:"unpriced_count"`
 }
 
 // UsageFilteredSummary is the aggregate for an arbitrary usage filter.
@@ -592,11 +635,15 @@ type UsageFilteredSummary struct {
 	CacheCreationTokens int64          `json:"cache_creation_tokens"`
 	TotalTokens         int64          `json:"total_tokens"`
 	CostMicroUSD        money.MicroUSD `json:"cost_micro_usd"`
+	UsageCostMicroUSD   money.MicroUSD `json:"usage_cost_micro_usd"`
+	UnpricedCount       int64          `json:"unpriced_count"`
 }
 
 type UsageTokenTrendPoint struct {
-	Date        string `json:"date"`
-	TotalTokens int64  `json:"total_tokens"`
+	Date              string         `json:"date"`
+	TotalTokens       int64          `json:"total_tokens"`
+	UsageCostMicroUSD money.MicroUSD `json:"usage_cost_micro_usd"`
+	UnpricedCount     int64          `json:"unpriced_count"`
 }
 
 func (s *Store) UsageOverviewSummary(ctx context.Context) (UsageOverviewSummary, error) {
@@ -604,8 +651,10 @@ func (s *Store) UsageOverviewSummary(ctx context.Context) (UsageOverviewSummary,
 	err := s.db.QueryRowContext(ctx, `SELECT
 		COUNT(1),
 		COALESCE(SUM(`+usageReportedTotalSQL("")+`), 0),
-		COALESCE(SUM(cost_micro_usd), 0)
-	FROM usage_ledger`).Scan(&summary.RequestCount, &summary.TotalTokens, &summary.EstimatedCostMicroUSD)
+		COALESCE(SUM(CASE WHEN source = 'statistics' THEN estimated_cost_micro_usd ELSE cost_micro_usd END), 0),
+		COALESCE(SUM(`+usageCostSQL("")+`), 0), COALESCE(SUM(`+usageUnpricedSQL("")+`), 0)
+	FROM usage_reporting`).Scan(&summary.RequestCount, &summary.TotalTokens, &summary.EstimatedCostMicroUSD,
+		&summary.UsageCostMicroUSD, &summary.UnpricedCount)
 	if err != nil {
 		return UsageOverviewSummary{}, fmt.Errorf("summarize overview usage: %w", err)
 	}
@@ -618,8 +667,9 @@ func (s *Store) SummarizeUsageFiltered(ctx context.Context, filter UsageFilter) 
 		COALESCE(SUM(reasoning_tokens), 0), COALESCE(SUM(cached_tokens), 0),
 		COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_creation_tokens), 0),
 		COALESCE(SUM(` + usageReportedTotalSQL("") + `), 0),
-		COALESCE(SUM(cost_micro_usd), 0)
-	FROM usage_ledger u`
+		COALESCE(SUM(cost_micro_usd), 0),
+		COALESCE(SUM(` + usageCostSQL("u.") + `), 0), COALESCE(SUM(` + usageUnpricedSQL("u.") + `), 0)
+	FROM usage_reporting u`
 	where, args := usageWhere(filter, "u")
 	if where != "" {
 		query += ` WHERE ` + where
@@ -628,6 +678,7 @@ func (s *Store) SummarizeUsageFiltered(ctx context.Context, filter UsageFilter) 
 	if err := s.db.QueryRowContext(ctx, query, args...).Scan(
 		&summary.RequestCount, &summary.FallbackCount, &summary.InputTokens, &summary.OutputTokens, &summary.ReasoningTokens,
 		&summary.CachedTokens, &summary.CacheReadTokens, &summary.CacheCreationTokens, &summary.TotalTokens, &summary.CostMicroUSD,
+		&summary.UsageCostMicroUSD, &summary.UnpricedCount,
 	); err != nil {
 		return UsageFilteredSummary{}, fmt.Errorf("summarize filtered usage: %w", err)
 	}
@@ -641,8 +692,9 @@ func (s *Store) UsageTokenTrend(ctx context.Context, days int) ([]UsageTokenTren
 	from := time.Now().UTC().AddDate(0, 0, 1-days).Truncate(24 * time.Hour).UnixMilli()
 	rows, err := s.db.QueryContext(ctx, `SELECT
 		strftime('%Y-%m-%d', created_at_unix_ms / 1000, 'unixepoch') AS day,
-		COALESCE(SUM(`+usageReportedTotalSQL("")+`), 0)
-	FROM usage_ledger
+		COALESCE(SUM(`+usageReportedTotalSQL("")+`), 0),
+		COALESCE(SUM(`+usageCostSQL("")+`), 0), COALESCE(SUM(`+usageUnpricedSQL("")+`), 0)
+	FROM usage_reporting
 	WHERE created_at_unix_ms >= ?
 	GROUP BY day
 	ORDER BY day`, from)
@@ -653,7 +705,7 @@ func (s *Store) UsageTokenTrend(ctx context.Context, days int) ([]UsageTokenTren
 	points := make([]UsageTokenTrendPoint, 0, days)
 	for rows.Next() {
 		var point UsageTokenTrendPoint
-		if err := rows.Scan(&point.Date, &point.TotalTokens); err != nil {
+		if err := rows.Scan(&point.Date, &point.TotalTokens, &point.UsageCostMicroUSD, &point.UnpricedCount); err != nil {
 			return nil, err
 		}
 		points = append(points, point)
@@ -670,15 +722,16 @@ func (s *Store) SummarizeUsageByKeyFiltered(ctx context.Context, filter UsageFil
 SELECT COALESCE(k.label, ''),
 	COUNT(1), COALESCE(SUM(u.cost_micro_usd), 0),
 	COALESCE(SUM(u.input_tokens), 0), COALESCE(SUM(u.output_tokens), 0),
-	COALESCE(SUM(CASE WHEN u.served_api = 1 THEN 1 ELSE 0 END), 0)
-FROM usage_ledger u
+	COALESCE(SUM(CASE WHEN u.served_api = 1 THEN 1 ELSE 0 END), 0),
+	COALESCE(SUM(` + usageCostSQL("u.") + `), 0), COALESCE(SUM(` + usageUnpricedSQL("u.") + `), 0)
+FROM usage_reporting u
 LEFT JOIN plugin_keys k ON k.id = u.plugin_key_id`
 	where, args := usageWhere(filter, "u")
 	if where != "" {
 		query += ` WHERE ` + where
 	}
 	query += ` GROUP BY u.plugin_key_id, COALESCE(k.label, '')
-ORDER BY COALESCE(SUM(u.cost_micro_usd), 0) DESC, COUNT(1) DESC`
+ORDER BY COALESCE(SUM(` + usageCostSQL("u.") + `), 0) DESC, COUNT(1) DESC`
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -688,7 +741,7 @@ ORDER BY COALESCE(SUM(u.cost_micro_usd), 0) DESC, COUNT(1) DESC`
 	for rows.Next() {
 		var item UsageKeySummary
 		if err := rows.Scan(&item.Label, &item.RequestCount, &item.CostMicroUSD,
-			&item.InputTokens, &item.OutputTokens, &item.FallbackCount); err != nil {
+			&item.InputTokens, &item.OutputTokens, &item.FallbackCount, &item.UsageCostMicroUSD, &item.UnpricedCount); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -707,13 +760,14 @@ func (s *Store) SummarizeUsageByModelFiltered(ctx context.Context, filter UsageF
 	COALESCE(SUM(` + usageReportedTotalSQL("u.") + `), 0),
 	COALESCE(SUM(u.cache_read_tokens), 0),
 	AVG(CASE WHEN u.tokens_per_second IS NOT NULL AND u.tokens_per_second > 0 THEN u.tokens_per_second END),
-	COALESCE(SUM(CASE WHEN u.served_api = 1 THEN 1 ELSE 0 END), 0)
-FROM usage_ledger u`
+	COALESCE(SUM(CASE WHEN u.served_api = 1 THEN 1 ELSE 0 END), 0),
+	COALESCE(SUM(` + usageCostSQL("u.") + `), 0), COALESCE(SUM(` + usageUnpricedSQL("u.") + `), 0)
+FROM usage_reporting u`
 	where, args := usageWhere(filter, "u")
 	if where != "" {
 		query += ` WHERE ` + where
 	}
-	query += ` GROUP BY u.model ORDER BY COALESCE(SUM(u.cost_micro_usd), 0) DESC, COUNT(1) DESC`
+	query += ` GROUP BY u.model ORDER BY COALESCE(SUM(` + usageCostSQL("u.") + `), 0) DESC, COUNT(1) DESC`
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -723,7 +777,7 @@ FROM usage_ledger u`
 	for rows.Next() {
 		var item UsageModelSummary
 		var avgTPS sql.NullFloat64
-		if err := rows.Scan(&item.Model, &item.RequestCount, &item.CostMicroUSD, &item.InputTokens, &item.OutputTokens, &item.TotalTokens, &item.CacheReadTokens, &avgTPS, &item.FallbackCount); err != nil {
+		if err := rows.Scan(&item.Model, &item.RequestCount, &item.CostMicroUSD, &item.InputTokens, &item.OutputTokens, &item.TotalTokens, &item.CacheReadTokens, &avgTPS, &item.FallbackCount, &item.UsageCostMicroUSD, &item.UnpricedCount); err != nil {
 			return nil, err
 		}
 		if avgTPS.Valid {
@@ -750,8 +804,9 @@ func (s *Store) SummarizeUsageTrendFiltered(ctx context.Context, filter UsageFil
 	query := `SELECT strftime('` + usageTrendLayout(grain) + `', u.created_at_unix_ms / 1000, 'unixepoch') AS bucket,
 		COALESCE(SUM(u.input_tokens), 0), COALESCE(SUM(u.output_tokens), 0), COALESCE(SUM(u.cached_tokens), 0),
 		COALESCE(SUM(u.cache_read_tokens), 0), COALESCE(SUM(u.cache_creation_tokens), 0),
-		COALESCE(SUM(u.cost_micro_usd), 0)
-	FROM usage_ledger u`
+		COALESCE(SUM(u.cost_micro_usd), 0),
+		COALESCE(SUM(` + usageCostSQL("u.") + `), 0), COALESCE(SUM(` + usageUnpricedSQL("u.") + `), 0)
+	FROM usage_reporting u`
 	where, args := usageWhere(filter, "u")
 	if where != "" {
 		query += ` WHERE ` + where
@@ -765,7 +820,7 @@ func (s *Store) SummarizeUsageTrendFiltered(ctx context.Context, filter UsageFil
 	var out []UsageDailySummary
 	for rows.Next() {
 		var item UsageDailySummary
-		if err := rows.Scan(&item.Date, &item.InputTokens, &item.OutputTokens, &item.CachedTokens, &item.CacheReadTokens, &item.CacheCreationTokens, &item.CostMicroUSD); err != nil {
+		if err := rows.Scan(&item.Date, &item.InputTokens, &item.OutputTokens, &item.CachedTokens, &item.CacheReadTokens, &item.CacheCreationTokens, &item.CostMicroUSD, &item.UsageCostMicroUSD, &item.UnpricedCount); err != nil {
 			return nil, err
 		}
 		out = append(out, item)

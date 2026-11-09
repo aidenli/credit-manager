@@ -13,6 +13,24 @@
   const LOCALES = ['zh-CN', 'zh-TW', 'en', 'ru'];
   const THEMES = ['auto', 'white', 'light', 'dark'];
   const COPY = {
+    '用量记录数不等于精确请求数；用量费用按实际 Token 与已配置价格计算，仅供统计，不扣减余额或更新密钥已用额度。Magpie 免费（0）；未配置价格会单独标注，历史已结算账本保持不变。': { 'zh-TW':'用量紀錄數不等於精確請求數；用量費用依實際 Token 與已設定價格計算，僅供統計，不扣減餘額或更新密鑰已用額度。Magpie 免費（0）；未設定價格會另行標註，歷史已結算帳本保持不變。', en:'Usage records are not exact request counts. Usage cost uses actual tokens and configured prices, for statistics only: no balance deduction or key spend updates. Magpie is free (0); unpriced records are flagged separately. Historical settled ledgers are unchanged.', ru:'Стоимость использования рассчитывается по фактическим токенам и настроенным ценам только для статистики, без списаний и изменения расходов ключа. Magpie бесплатен (0); записи без цены отмечаются отдельно. История расчётов не меняется.' },
+    '用量记录数': { 'zh-TW':'用量紀錄數', en:'Usage records', ru:'Записи использования' },
+    '统计写入状态（本次运行累计，不随筛选变化）': { 'zh-TW':'統計寫入狀態（本次執行累計，不隨篩選變化）', en:'Statistics writer (runtime totals, independent of filters)', ru:'Запись статистики (с запуска, независимо от фильтров)' },
+    '排队': { 'zh-TW':'排隊', en:'Queued', ru:'В очереди' },
+    '已接收': { 'zh-TW':'已接收', en:'Accepted', ru:'Принято' },
+    '已处理': { 'zh-TW':'已處理', en:'Processed', ru:'Обработано' },
+    '已丢弃': { 'zh-TW':'已丟棄', en:'Dropped', ru:'Отброшено' },
+    '写入失败': { 'zh-TW':'寫入失敗', en:'Write failed', ru:'Ошибка записи' },
+    '未归属': { 'zh-TW':'未歸屬', en:'Unattributed', ru:'Без привязки' },
+    '统计记录可能不完整': { 'zh-TW':'統計紀錄可能不完整', en:'Statistics may be incomplete', ru:'Статистика может быть неполной' },
+    '统计写入状态暂不可用': { 'zh-TW':'統計寫入狀態暫不可用', en:'Statistics writer status unavailable', ru:'Статус записи статистики недоступен' },
+    '用量费用': { 'zh-TW':'用量費用', en:'Usage cost', ru:'Стоимость использования' },
+    '用量费用 USD': { 'zh-TW':'用量費用 USD', en:'Usage cost USD', ru:'Стоимость использования USD' },
+    '未配置价格': { 'zh-TW':'未設定價格', en:'Price not configured', ru:'Цена не настроена' },
+    '免费': { 'zh-TW':'免費', en:'Free', ru:'Бесплатно' },
+    '实际扣费': { 'zh-TW':'實際扣費', en:'Actual charge', ru:'Фактическое списание' },
+    '参考费用（不扣费）': { 'zh-TW':'參考費用（不扣費）', en:'Reference cost (not charged)', ru:'Справочная стоимость (без списания)' },
+    '价格未知': { 'zh-TW':'價格未知', en:'Price unknown', ru:'Цена неизвестна' },
     '语言': { 'zh-TW':'語言', en:'Language', ru:'Язык' }, '主题': { 'zh-TW':'主題', en:'Theme', ru:'Тема' },
     '跟随系统': { 'zh-TW':'跟隨系統', en:'System', ru:'Системная' }, '纯白': { 'zh-TW':'純白', en:'White', ru:'Белая' }, '羊毛纸': { 'zh-TW':'羊毛紙', en:'Parchment', ru:'Пергамент' }, '暗色': { 'zh-TW':'暗色', en:'Dark', ru:'Тёмная' },
     '额度仪表盘': { 'zh-TW':'額度儀表板', en:'Credit Dashboard', ru:'Панель лимитов' }, '连接设置': { 'zh-TW':'連線設定', en:'Connection settings', ru:'Настройки подключения' }, '刷新数据': { 'zh-TW':'重新整理資料', en:'Refresh data', ru:'Обновить данные' },
@@ -21,8 +39,8 @@
     '概览筛选': { 'zh-TW':'概覽篩選', en:'Overview filters', ru:'Фильтры обзора' }, '筛选仅影响概览指标和图表；「今日」按本地自然日。': { 'zh-TW':'篩選僅影響概覽指標和圖表；「今天」按本地自然日。', en:'Filters affect overview metrics and charts only; Today uses the local calendar day.', ru:'Фильтры влияют только на метрики и диаграммы; «Сегодня» — локальный день.' }, '今日 · 全部数据': { 'zh-TW':'今天 · 全部資料', en:'Today · all data', ru:'Сегодня · все данные' }, '最近 30 天 · 全部数据': { 'zh-TW':'最近 30 天 · 全部資料', en:'Last 30 days · all data', ru:'Последние 30 дней · все данные' },
     '时间范围': { 'zh-TW':'時間範圍', en:'Time range', ru:'Период' }, '今日': { 'zh-TW':'今天', en:'Today', ru:'Сегодня' }, '最近 7 天': { 'zh-TW':'最近 7 天', en:'Last 7 days', ru:'Последние 7 дней' }, '最近 30 天': { 'zh-TW':'最近 30 天', en:'Last 30 days', ru:'Последние 30 дней' }, '最近 90 天': { 'zh-TW':'最近 90 天', en:'Last 90 days', ru:'Последние 90 дней' }, '全部时间': { 'zh-TW':'全部時間', en:'All time', ru:'За всё время' }, '自定义范围': { 'zh-TW':'自訂範圍', en:'Custom range', ru:'Свой период' }, '时间范围（UTC）': { 'zh-TW':'時間範圍（UTC）', en:'Time range (UTC)', ru:'Период (UTC)' }, '至': { 'zh-TW':'至', en:'to', ru:'до' },
     '密钥': { 'zh-TW':'密鑰', en:'Key', ru:'Ключ' }, '全部密钥': { 'zh-TW':'全部密鑰', en:'All keys', ru:'Все ключи' }, '账号': { 'zh-TW':'帳號', en:'Account', ru:'Аккаунт' }, '搜索账号名称或 ID': { 'zh-TW':'搜尋帳號名稱或 ID', en:'Search account name or ID', ru:'Поиск аккаунта или ID' }, '模型': { 'zh-TW':'模型', en:'Model', ru:'Модель' }, '全部已使用模型': { 'zh-TW':'全部已使用模型', en:'All used models', ru:'Все использованные модели' }, '来源': { 'zh-TW':'來源', en:'Source', ru:'Источник' }, '全部来源': { 'zh-TW':'全部來源', en:'All sources', ru:'Все источники' },
-    '重置': { 'zh-TW':'重設', en:'Reset', ru:'Сбросить' }, '刷新概览': { 'zh-TW':'重新整理概覽', en:'Refresh overview', ru:'Обновить обзор' }, 'Token 趋势': { 'zh-TW':'Token 趨勢', en:'Token trend', ru:'Динамика токенов' }, '费用趋势': { 'zh-TW':'費用趨勢', en:'Cost trend', ru:'Динамика расходов' },     '模型调用占比': { 'zh-TW':'模型呼叫占比', en:'Model usage share', ru:'Доля вызовов моделей' }, '模型效率排行': { 'zh-TW':'模型效率排行', en:'Model efficiency rank', ru:'Рейтинг эффективности' }, '模型效率指标': { 'zh-TW':'模型效率指標', en:'Efficiency metric', ru:'Метрика эффективности' }, '性价比': { 'zh-TW':'性價比', en:'Value', ru:'Выгода' }, '单次': { 'zh-TW':'單次', en:'Per call', ru:'За запрос' }, '吞吐': { 'zh-TW':'吞吐', en:'Throughput', ru:'Скорость' },     '按每美元产出 Token 排序，越高越省': { 'zh-TW':'依每美元產出 Token 排序，越高越省', en:'Ranked by tokens per dollar; higher is cheaper', ru:'По токенам на доллар; больше — выгоднее' }, '按每人民币产出 Token 排序，越高越省': { 'zh-TW':'依每人民幣產出 Token 排序，越高越省', en:'Ranked by tokens per yuan; higher is cheaper', ru:'По токенам на юань; больше — выгоднее' }, '平均每次请求费用，越低越省': { 'zh-TW':'平均每次請求費用，越低越省', en:'Average cost per request; lower is cheaper', ru:'Средняя цена запроса; меньше — выгоднее' }, '缓存读取占输入比例，越高越省': { 'zh-TW':'快取讀取佔輸入比例，越高越省', en:'Cache-read share of input; higher is cheaper', ru:'Доля чтения кэша во входе; больше — выгоднее' }, '平均生成速度，越高越快': { 'zh-TW':'平均生成速度，越高越快', en:'Average generation speed; higher is faster', ru:'Средняя скорость генерации; больше — быстрее' }, '当前筛选条件下暂无模型效率数据': { 'zh-TW':'目前篩選條件下暫無模型效率資料', en:'No model efficiency data for the current filters', ru:'Нет данных об эффективности моделей' }, '免费': { 'zh-TW':'免費', en:'Free', ru:'Бесплатно' }, '次': { 'zh-TW':'次', en:'calls', ru:'вызов.' }, '调用次数': { 'zh-TW':'呼叫次數', en:'Requests', ru:'Запросы' }, '占比': { 'zh-TW':'佔比', en:'Share', ru:'Доля' }, '费用': { 'zh-TW':'費用', en:'Cost', ru:'Стоимость' }, '入': { 'zh-TW':'入', en:'In', ru:'Вх.' }, '出': { 'zh-TW':'出', en:'Out', ru:'Исх.' }, '缓存': { 'zh-TW':'快取', en:'Cache', ru:'Кэш' }, '命中': { 'zh-TW':'命中', en:'Hit', ru:'Попад.' }, '未连接': { 'zh-TW':'未連線', en:'Disconnected', ru:'Нет связи' },
-    '趋势时间维度': { 'zh-TW':'趨勢時間維度', en:'Trend interval', ru:'Интервал тренда' }, 'Token 趋势时间维度': { 'zh-TW':'Token 趨勢時間維度', en:'Token trend interval', ru:'Интервал токенов' }, '费用趋势时间维度': { 'zh-TW':'費用趨勢時間維度', en:'Cost trend interval', ru:'Интервал расходов' },     '时': { 'zh-TW':'時', en:'Hour', ru:'Час' }, '日': { 'zh-TW':'日', en:'Day', ru:'День' }, '周': { 'zh-TW':'週', en:'Week', ru:'Неделя' }, '月': { 'zh-TW':'月', en:'Month', ru:'Месяц' },
+    '重置': { 'zh-TW':'重設', en:'Reset', ru:'Сбросить' }, '刷新概览': { 'zh-TW':'重新整理概覽', en:'Refresh overview', ru:'Обновить обзор' }, 'Token 趋势': { 'zh-TW':'Token 趨勢', en:'Token trend', ru:'Динамика токенов' }, '用量费用趋势': { 'zh-TW':'用量費用趨勢', en:'Usage cost trend', ru:'Динамика стоимости использования' },     '模型调用占比': { 'zh-TW':'模型呼叫占比', en:'Model usage share', ru:'Доля вызовов моделей' }, '模型效率排行': { 'zh-TW':'模型效率排行', en:'Model efficiency rank', ru:'Рейтинг эффективности' }, '模型效率指标': { 'zh-TW':'模型效率指標', en:'Efficiency metric', ru:'Метрика эффективности' }, '性价比': { 'zh-TW':'性價比', en:'Value', ru:'Выгода' }, '单次': { 'zh-TW':'單次', en:'Per call', ru:'За запрос' }, '吞吐': { 'zh-TW':'吞吐', en:'Throughput', ru:'Скорость' },     '按每美元产出 Token 排序，越高越省': { 'zh-TW':'依每美元產出 Token 排序，越高越省', en:'Ranked by tokens per dollar; higher is cheaper', ru:'По токенам на доллар; больше — выгоднее' }, '按每人民币产出 Token 排序，越高越省': { 'zh-TW':'依每人民幣產出 Token 排序，越高越省', en:'Ranked by tokens per yuan; higher is cheaper', ru:'По токенам на юань; больше — выгоднее' }, '平均每条用量记录费用，越低越省': { 'zh-TW':'平均每條用量紀錄費用，越低越省', en:'Average usage cost per record; lower is cheaper', ru:'Средняя стоимость записи; меньше — выгоднее' }, '缓存读取占输入比例，越高越省': { 'zh-TW':'快取讀取佔輸入比例，越高越省', en:'Cache-read share of input; higher is cheaper', ru:'Доля чтения кэша во входе; больше — выгоднее' }, '平均生成速度，越高越快': { 'zh-TW':'平均生成速度，越高越快', en:'Average generation speed; higher is faster', ru:'Средняя скорость генерации; больше — быстрее' }, '当前筛选条件下暂无模型效率数据': { 'zh-TW':'目前篩選條件下暫無模型效率資料', en:'No model efficiency data for the current filters', ru:'Нет данных об эффективности моделей' }, '未扣费': { 'zh-TW':'未扣費', en:'Not charged', ru:'Без списания' }, '次': { 'zh-TW':'次', en:'calls', ru:'вызов.' }, '调用次数': { 'zh-TW':'呼叫次數', en:'Requests', ru:'Запросы' }, '占比': { 'zh-TW':'佔比', en:'Share', ru:'Доля' }, '费用': { 'zh-TW':'費用', en:'Cost', ru:'Стоимость' }, '入': { 'zh-TW':'入', en:'In', ru:'Вх.' }, '出': { 'zh-TW':'出', en:'Out', ru:'Исх.' }, '缓存': { 'zh-TW':'快取', en:'Cache', ru:'Кэш' }, '命中': { 'zh-TW':'命中', en:'Hit', ru:'Попад.' }, '未连接': { 'zh-TW':'未連線', en:'Disconnected', ru:'Нет связи' },
+    '趋势时间维度': { 'zh-TW':'趨勢時間維度', en:'Trend interval', ru:'Интервал тренда' }, 'Token 趋势时间维度': { 'zh-TW':'Token 趨勢時間維度', en:'Token trend interval', ru:'Интервал токенов' }, '用量费用趋势时间维度': { 'zh-TW':'用量費用趨勢時間維度', en:'Usage cost trend interval', ru:'Интервал расходов' },     '时': { 'zh-TW':'時', en:'Hour', ru:'Час' }, '日': { 'zh-TW':'日', en:'Day', ru:'День' }, '周': { 'zh-TW':'週', en:'Week', ru:'Неделя' }, '月': { 'zh-TW':'月', en:'Month', ru:'Месяц' },
     '按密钥设置额度、启停状态和可用模型策略。': { 'zh-TW':'依密鑰設定額度、啟停狀態和可用模型策略。', en:'Set limits, status, and model access for each key.', ru:'Настройте лимиты, статус и доступ к моделям для каждого ключа.' }, '额度隔离': { 'zh-TW':'額度隔離', en:'Isolated limits', ru:'Изолированные лимиты' }, '添加密钥': { 'zh-TW':'新增密鑰', en:'Add key', ru:'Добавить ключ' }, '已有密钥': { 'zh-TW':'已有密鑰', en:'Existing keys', ru:'Существующие ключи' }, '额度与状态一览': { 'zh-TW':'額度與狀態一覽', en:'Limits and status', ru:'Лимиты и статус' },
     '模型与价格': { 'zh-TW':'模型與價格', en:'Models & pricing', ru:'Модели и цены' }, '文本模型按百万 Token 计价；纯出图模型按张计费，不能套用 Token 价。': { 'zh-TW':'文字模型按百萬 Token 計價；純出圖模型按張計費，不能套用 Token 價。', en:'Text models bill per million tokens; image models bill per image.', ru:'Текстовые модели тарифицируются за миллион токенов, генерация изображений — за картинку.' }, '定价规则': { 'zh-TW':'定價規則', en:'Pricing rules', ru:'Правила цен' }, '当前代理模型': { 'zh-TW':'目前代理模型', en:'Current proxy models', ru:'Текущие модели прокси' }, '加载全部模型': { 'zh-TW':'載入全部模型', en:'Load all models', ru:'Загрузить все модели' }, '加载当前代理公开的模型后，可设置价格，或启用/禁用单个模型。禁用后无法调用，也不会出现在客户端模型列表中。': { 'zh-TW':'載入目前代理公開的模型後，可設定價格，或啟用/停用單一模型。停用後無法呼叫，也不會出現在客戶端模型列表中。', en:'After loading proxy models, set prices or enable/disable a model. Disabled models cannot be called and are omitted from the client model list.', ru:'После загрузки моделей задайте цены или включите/отключите модель. Отключённые модели нельзя вызвать, и они не попадают в клиентский список.' },     '启用': { 'zh-TW':'啟用', en:'Enable', ru:'Включить' }, '禁用': { 'zh-TW':'停用', en:'Disable', ru:'Отключить' }, '状态': { 'zh-TW':'狀態', en:'Status', ru:'Статус' }, '模型已启用': { 'zh-TW':'模型已啟用', en:'Model enabled', ru:'Модель включена' }, '模型已禁用': { 'zh-TW':'模型已停用', en:'Model disabled', ru:'Модель отключена' },
     '计费方式': { 'zh-TW':'計費方式', en:'Billing mode', ru:'Режим тарифа' }, '按 Token（USD / 1M）': { 'zh-TW':'按 Token（USD / 1M）', en:'Per token (USD / 1M)', ru:'За токен (USD / 1M)' }, '按张（出图）': { 'zh-TW':'按張（出圖）', en:'Per image', ru:'За изображение' }, '每张 USD': { 'zh-TW':'每張 USD', en:'USD / image', ru:'USD / изображение' }, '出图': { 'zh-TW':'出圖', en:'Image', ru:'Картинка' },     '按张计费': { 'zh-TW':'按張計費', en:'Billed per image', ru:'За картинку' },
@@ -115,11 +133,11 @@
     '文本模型按 USD / 1M tokens；纯出图模型按张计费，不要套用 Token 价。': { 'zh-TW':'文字模型按 USD / 1M tokens；純出圖模型按張計費，不要套用 Token 價。', en:'Text models use USD / 1M tokens; image models bill per image, not token prices.', ru:'Текстовые модели — USD / 1M токенов; картинки — за штуку, не по токенам.' },
     '未加载': { 'zh-TW':'未載入', en:'Not loaded', ru:'Не загружено' }, '未设置筛选': { 'zh-TW':'未設定篩選', en:'No filters', ru:'Нет фильтров' },
     '汇总和明细共用以下条件。「今日」按本地自然日，金额单位为 USD。': { 'zh-TW':'彙總和明細共用以下條件。「今天」按本地自然日，金額單位為 USD。', en:'Summary and details share these filters. Today uses the local calendar day; amounts are USD.', ru:'Сводка и детали используют одни фильтры. «Сегодня» — локальный день; суммы в USD.' },
-    '最低费用（USD）': { 'zh-TW':'最低費用（USD）', en:'Min cost (USD)', ru:'Мин. расход (USD)' }, '最高费用（USD）': { 'zh-TW':'最高費用（USD）', en:'Max cost (USD)', ru:'Макс. расход (USD)' },
+    '最低用量费用（USD）': { 'zh-TW':'最低用量費用（USD）', en:'Min usage cost (USD)', ru:'Мин. расход (USD)' }, '最高用量费用（USD）': { 'zh-TW':'最高用量費用（USD）', en:'Max usage cost (USD)', ru:'Макс. расход (USD)' },
     '最低 Token 数': { 'zh-TW':'最低 Token 數', en:'Min tokens', ru:'Мин. токенов' }, '最高 Token 数': { 'zh-TW':'最高 Token 數', en:'Max tokens', ru:'Макс. токенов' },
     '点击区块或模型名称下钻': { 'zh-TW':'點擊區塊或模型名稱下鑽', en:'Click a slice or model name to drill down', ru:'Нажмите сектор или имя модели' },
     '输入 / 输出 / 缓存读取 / 缓存命中率': { 'zh-TW':'輸入 / 輸出 / 快取讀取 / 快取命中率', en:'Input / output / cache read / cache hit rate', ru:'Вход / выход / чтение кэша / попадания' },
-    '按日汇总实际费用': { 'zh-TW':'按日彙總實際費用', en:'Actual cost by day', ru:'Фактические расходы по дням' },
+    '按日汇总用量费用': { 'zh-TW':'按日彙總用量費用', en:'Usage cost by day', ru:'Фактические расходы по дням' },
     '删除密钥': { 'zh-TW':'刪除密鑰', en:'Delete key', ru:'Удалить ключ' }, '确认删除': { 'zh-TW':'確認刪除', en:'Confirm delete', ru:'Подтвердить удаление' },
     '删除后该密钥将立即失效，历史使用统计、预占和审计记录会保留。': { 'zh-TW':'刪除後該密鑰將立即失效，歷史使用統計、預占和稽核記錄會保留。', en:'The key is revoked immediately. Usage stats, holds, and audit records are kept.', ru:'Ключ сразу отключается. Статистика, резервы и аудит сохраняются.' },
     '重置额度': { 'zh-TW':'重設額度', en:'Reset quota', ru:'Сбросить квоту' }, '重置已选额度': { 'zh-TW':'重設已選額度', en:'Reset selected quotas', ru:'Сбросить выбранные квоты' }, '重置全部额度': { 'zh-TW':'重設全部額度', en:'Reset all quotas', ru:'Сбросить все квоты' },
@@ -161,7 +179,7 @@
     '连接 CPA 管理接口后，即可查看 Token、费用和模型调用趋势。': { 'zh-TW':'連線 CPA 管理介面後，即可查看 Token、費用和模型呼叫趨勢。', en:'Connect the CPA management API to see token, cost, and model trends.', ru:'Подключите API управления CPA, чтобы видеть токены, расходы и модели.' },
     '图表组件加载失败，请检查网络连接后刷新页面': { 'zh-TW':'圖表元件載入失敗，請檢查網路連線後重新整理頁面', en:'Chart component failed to load. Check the network and refresh.', ru:'Не удалось загрузить график. Проверьте сеть и обновите страницу.' },
     '当前筛选条件下暂无 Token 趋势': { 'zh-TW':'目前篩選條件下暫無 Token 趨勢', en:'No token trend for the current filters', ru:'Нет динамики токенов для текущих фильтров' },
-    '当前筛选条件下暂无费用趋势': { 'zh-TW':'目前篩選條件下暫無費用趨勢', en:'No cost trend for the current filters', ru:'Нет динамики расходов для текущих фильтров' },
+    '当前筛选条件下暂无用量费用趋势': { 'zh-TW':'目前篩選條件下暫無用量費用趨勢', en:'No usage cost trend for the current filters', ru:'Нет динамики расходов для текущих фильтров' },
     '当前筛选条件下暂无模型使用数据': { 'zh-TW':'目前篩選條件下暫無模型使用資料', en:'No model usage for the current filters', ru:'Нет данных по моделям для текущих фильтров' },
     '当前筛选条件下暂无按密钥汇总': { 'zh-TW':'目前篩選條件下暫無依密鑰彙總', en:'No key totals for the current filters', ru:'Нет сводки по ключам' },
     '当前筛选条件下暂无按模型汇总': { 'zh-TW':'目前篩選條件下暫無依模型彙總', en:'No model totals for the current filters', ru:'Нет сводки по моделям' },
@@ -175,7 +193,7 @@
     '是': { 'zh-TW':'是', en:'Yes', ru:'Да' }, '否': { 'zh-TW':'否', en:'No', ru:'Нет' }, '未设置': { 'zh-TW':'未設定', en:'Not set', ru:'Не задано' }, '待保存': { 'zh-TW':'待儲存', en:'Unsaved', ru:'Не сохранено' }, '无价格': { 'zh-TW':'無價格', en:'No price', ru:'Нет цены' },
     '设置价格': { 'zh-TW':'設定價格', en:'Set price', ru:'Задать цену' }, 'models.dev 价格': { 'zh-TW':'models.dev 價格', en:'models.dev price', ru:'Цена models.dev' }, '当前规则': { 'zh-TW':'目前規則', en:'Current rule', ru:'Текущее правило' },
     '指定密钥': { 'zh-TW':'指定密鑰', en:'Selected key', ru:'Выбранный ключ' }, '密钥数 / 可用': { 'zh-TW':'密鑰數 / 可用', en:'Keys / active', ru:'Ключи / активные' },
-    '筛选请求': { 'zh-TW':'篩選請求', en:'Filtered requests', ru:'Запросы фильтра' }, '筛选 Token': { 'zh-TW':'篩選 Token', en:'Filtered tokens', ru:'Токены фильтра' }, '筛选费用': { 'zh-TW':'篩選費用', en:'Filtered cost', ru:'Расход фильтра' }, '模型数量': { 'zh-TW':'模型數量', en:'Models', ru:'Модели' },
+    '筛选请求': { 'zh-TW':'篩選請求', en:'Filtered requests', ru:'Запросы фильтра' }, '筛选 Token': { 'zh-TW':'篩選 Token', en:'Filtered tokens', ru:'Токены фильтра' }, '筛选用量费用': { 'zh-TW':'篩選用量費用', en:'Filtered usage cost', ru:'Стоимость использования по фильтру' }, '模型数量': { 'zh-TW':'模型數量', en:'Models', ru:'Модели' },
     '认证并发已更新': { 'zh-TW':'認證併發已更新', en:'Auth concurrency updated', ru:'Параллельность авторизации обновлена' },
     '最大并发必须是大于等于 0 的整数': { 'zh-TW':'最大併發必須是大於等於 0 的整數', en:'Max concurrency must be an integer ≥ 0', ru:'Параллельность должна быть целым ≥ 0' },
     '没有可更新的认证': { 'zh-TW':'沒有可更新的認證', en:'No auths to update', ru:'Нет авторизаций для обновления' },
@@ -2150,12 +2168,13 @@
     items.forEach(item => {
       const name = item.model || '未标记模型';
       const current = usage.get(name) || {
-        model: name, tokens: 0, requests: 0, cost: 0,
+        model: name, tokens: 0, requests: 0, cost: 0, unpriced: 0,
         cacheRead: 0, cacheRelated: 0, tpsSum: 0, tpsCount: 0,
       };
       current.tokens += usageTokens(item);
       current.requests += 1;
-      current.cost += Number(item.cost_micro_usd || 0);
+      current.cost += usageCost(item);
+      current.unpriced += item.usage_cost_status === 'unpriced' ? 1 : 0;
       current.cacheRead += Number(item.cache_read_tokens || 0);
       current.cacheRelated += usageCacheRelated(item);
       const tps = Number(item.tokens_per_second);
@@ -2189,8 +2208,8 @@
 
   function modelShareCenterLabel(metric) {
     if (metric === 'tokens') return 'Token';
-    if (metric === 'cost') return '费用';
-    return '请求次数';
+    if (metric === 'cost') return '用量费用';
+    return '用量记录数';
   }
 
   function syncModelShareMetricSwitch() {
@@ -2222,9 +2241,9 @@
       return {
         key,
         label: '单次',
-        hint: '平均每次请求费用，越低越省',
+        hint: '平均每条用量记录费用，越低越省',
         higher: false,
-        ready: item => item.requests > 0,
+        ready: item => item.requests > 0 && !item.unpriced,
         score: item => item.requests > 0 ? item.cost / item.requests : NaN,
         format: value => formatMoney(value),
       };
@@ -2256,7 +2275,7 @@
       label: '性价比',
       hint: getCurrency() === 'CNY' ? '按每人民币产出 Token 排序，越高越省' : '按每美元产出 Token 排序，越高越省',
       higher: true,
-      ready: item => item.tokens > 0,
+      ready: item => item.tokens > 0 && !item.unpriced,
       score: item => {
         const spend = displaySpend(item.cost);
         if (spend <= 0) return item.tokens > 0 ? Infinity : 0;
@@ -2302,7 +2321,25 @@
   }
 
   function usageCost(item) {
-    return Number(item.cost_micro_usd || 0);
+    return Number(item.usage_cost_micro_usd || 0);
+  }
+
+  function usageUnpricedText(count) {
+    return Number(count) > 0 ? t('未配置价格') + ': ' + Number(count).toLocaleString() + ' ' + t('条') : '';
+  }
+
+  function usageCostText(item) {
+    if (item.usage_cost_status === 'unpriced' || item.usage_cost_micro_usd == null) return t('未配置价格');
+    if (item.usage_cost_status === 'free') return t('免费') + ' · ' + formatMoney(0);
+    return formatMoney(item.usage_cost_micro_usd);
+  }
+
+  function usageCostTitle(item) {
+    const parts = [t('用量费用') + ' ' + usageCostText(item), t('实际扣费') + ' ' + formatMoney(item.cost_micro_usd)];
+    if (item.statistics_only && item.price_known && Number(item.estimated_cost_micro_usd) !== usageCost(item)) {
+      parts.push(t('参考费用（不扣费）') + ' ' + formatMoney(item.estimated_cost_micro_usd));
+    }
+    return parts.join(' · ');
   }
 
   function usageCacheRelated(item) {
@@ -2371,6 +2408,7 @@
       const target = $(id);
       if (target) target.innerHTML = content;
     });
+    $('usageStatisticsStatus').textContent = '';
     const stats = $('usageStats');
     if (stats) stats.innerHTML = content;
     ['keyPagination', 'pricingPagination', 'usagePagination', 'authQuotaPagination'].forEach(id => {
@@ -2725,20 +2763,20 @@
     const grain = getTrendGrain('cost');
     const points = overviewTrendSeries(items, grain);
     const total = points.reduce((sum, point) => sum + point.cost, 0);
-    $('overviewCostTrendTotal').innerHTML = points.length ? trendMetric('费用', formatMoney(total), '#1eb787', '', '费用') : '';
+    $('overviewCostTrendTotal').innerHTML = points.length ? trendMetric('用量费用', formatMoney(total), '#1eb787', '', '用量费用') : '';
     $('overviewCostTrendHint').textContent = points.length
       ? points.length + ' 个有使用记录的' + trendGrainUnit(grain)
-      : '按' + trendGrainUnit(grain) + '汇总实际费用';
+      : '按' + trendGrainUnit(grain) + '汇总用量费用';
     syncTrendGrainSwitch();
     renderOverviewLineChart({
       targetID: 'overviewCostTrend',
       points,
-      emptyText: '当前筛选条件下暂无费用趋势',
+      emptyText: '当前筛选条件下暂无用量费用趋势',
       formatLeft: value => formatMoney(value),
       series: [
         {
           key: 'cost',
-          label: '费用',
+          label: '用量费用',
           color: '#1eb787',
           fill: 'rgba(30,183,135,.13)',
           format: value => formatMoney(value),
@@ -2769,9 +2807,9 @@
             '<span class="share-legend-pct">'+percent.toFixed(1)+'%</span>' +
           '</span>' +
           '<span class="share-legend-metrics">' +
-            '<span class="share-legend-metric"><em>调用次数</em><b>'+esc(item.requests.toLocaleString())+'</b></span>' +
+            '<span class="share-legend-metric"><em>用量记录数</em><b>'+esc(item.requests.toLocaleString())+'</b></span>' +
             '<span class="share-legend-metric"><em>Token</em><b>'+esc(formatTokens(item.tokens))+'</b></span>' +
-            '<span class="share-legend-metric"><em>费用</em><b title="'+esc(moneyTitle(item.cost))+'">'+esc(formatMoney(item.cost))+'</b></span>' +
+            '<span class="share-legend-metric"><em>用量费用</em><b title="'+esc(moneyTitle(item.cost))+'">'+esc(formatMoney(item.cost))+'</b></span>' +
           '</span>' +
         '</span>' +
       '</button>';
@@ -2820,9 +2858,9 @@
         formatter(param) {
           const item = param.data.item;
           return '<strong>'+esc(item.model)+'</strong><br/>'+
-            '<span style="color:#cdd6cf">'+esc(t('调用次数'))+'</span><span style="float:right;margin-left:20px;font-weight:700">'+esc(item.requests.toLocaleString())+'</span><br/>'+
+            '<span style="color:#cdd6cf">'+esc(t('用量记录数'))+'</span><span style="float:right;margin-left:20px;font-weight:700">'+esc(item.requests.toLocaleString())+'</span><br/>'+
             '<span style="color:#cdd6cf">Token</span><span style="float:right;margin-left:20px;font-weight:700">'+esc(formatTokens(item.tokens))+'</span><br/>'+
-            '<span style="color:#cdd6cf">'+esc(t('费用'))+'</span><span style="float:right;margin-left:20px;font-weight:700">'+esc(formatMoney(item.cost))+'</span><br/>'+
+            '<span style="color:#cdd6cf">'+esc(t('用量费用'))+'</span><span style="float:right;margin-left:20px;font-weight:700">'+esc(formatMoney(item.cost))+'</span><br/>'+
             '<span style="color:#cdd6cf">'+esc(t('占比'))+'</span><span style="float:right;margin-left:20px">'+param.percent.toFixed(1)+'%</span>';
         },
       },
@@ -2899,7 +2937,7 @@
     target.innerHTML = models.map((item, index) => {
       const ready = spec.ready(item);
       const score = ready ? spec.score(item) : NaN;
-      const value = ready && (Number.isFinite(score) || score === Infinity) ? spec.format(score) : '—';
+      const value = ready && (Number.isFinite(score) || score === Infinity) ? spec.format(score) : (item.unpriced && ['value', 'unit'].includes(spec.key) ? t('未配置价格') : '—');
       const width = rankBarPercent(item, models, spec);
       const title = ['value', 'unit', 'cache', 'tps'].map(key => {
         const metric = modelRankSpec(key);
@@ -2916,7 +2954,7 @@
             '<span class="model-rank-value">'+esc(value)+'</span>' +
           '</span>' +
           '<span class="model-rank-bar" aria-hidden="true"><i style="width:'+width.toFixed(1)+'%"></i></span>' +
-          '<span class="model-rank-meta">'+esc(item.requests.toLocaleString() + ' ' + t('次') + ' · ' + formatTokens(item.tokens) + ' Token · ' + formatMoney(item.cost))+'</span>' +
+          '<span class="model-rank-meta">'+esc(item.requests.toLocaleString() + ' ' + t('次') + ' · ' + formatTokens(item.tokens) + ' Token · ' + formatMoney(item.cost) + (item.unpriced ? ' · ' + usageUnpricedText(item.unpriced) : ''))+'</span>' +
         '</span>' +
       '</button>';
     }).join('');
@@ -2949,7 +2987,7 @@
     void loadAuthFilterAccounts();
     const activeKeys = keys.filter(k => k.enabled && !k.revoked_at).length;
     const totalTokens = items.reduce((sum, item) => sum + usageTokens(item), 0);
-    const totalSpend = items.reduce((sum, item) => sum + Number(item.cost_micro_usd || 0), 0);
+    const totalSpend = items.reduce((sum, item) => sum + usageCost(item), 0);
     const totalReq = items.length;
     const filter = getOverviewFilterValues();
     const rangeText = $('overviewRangeFilter').selectedOptions[0].textContent;
@@ -2958,12 +2996,14 @@
     if (filter.auth_id || filter.auth_index) labels.push('账号');
     if (filter.model) labels.push('模型: ' + filter.model);
     if (filter.source) labels.push('来源: ' + filter.source);
+    const unpriced = items.filter(item => item.usage_cost_status === 'unpriced').length;
+    if (unpriced) labels.push(usageUnpricedText(unpriced));
     $('overviewFilterState').textContent = labels.join(' · ');
     $('overviewStats').innerHTML = [
       ['key', '密钥数 / 可用', keys.length + ' / ' + activeKeys],
-      ['activity', '筛选请求', totalReq.toLocaleString()],
+      ['activity', '用量记录数', totalReq.toLocaleString()],
       ['layers', '筛选 Token', formatTokens(totalTokens)],
-      ['coin', '筛选费用', formatMoney(totalSpend)],
+      ['coin', t('用量费用') + ' ' + currencyCode(), formatMoney(totalSpend)],
       ['cpu', '模型数量', overviewModelUsage(items).length.toLocaleString()],
     ].map(([icon, k, v]) => '<div class="stat"><div class="k"><span class="stat-icon" aria-hidden="true">'+uiIcon(icon)+'</span>'+esc(k)+'</div><div class="v">'+esc(v)+'</div></div>').join('');
     renderOverviewTrend(items);
@@ -4815,7 +4855,8 @@
       label: x.Label || x.label || '历史密钥',
       req: x.RequestCount || x.request_count || 0,
       fb: x.FallbackCount || x.fallback_count || 0,
-      cost: x.CostMicroUSD || x.cost_micro_usd || 0,
+      cost: x.UsageCostMicroUSD ?? x.usage_cost_micro_usd ?? 0,
+      unpriced: x.UnpricedCount ?? x.unpriced_count ?? 0,
       inn: x.InputTokens || x.input_tokens || 0,
       out: x.OutputTokens || x.output_tokens || 0,
     };
@@ -4825,7 +4866,8 @@
       model: x.Model || x.model,
       req: x.RequestCount || x.request_count || 0,
       fb: x.FallbackCount || x.fallback_count || 0,
-      cost: x.CostMicroUSD || x.cost_micro_usd || 0,
+      cost: x.UsageCostMicroUSD ?? x.usage_cost_micro_usd ?? 0,
+      unpriced: x.UnpricedCount ?? x.unpriced_count ?? 0,
       inn: x.InputTokens || x.input_tokens || 0,
       out: x.OutputTokens || x.output_tokens || 0,
     };
@@ -4864,6 +4906,14 @@
   }
 
   function renderUsage(summary, recent) {
+    const status = summary.statistics_status;
+    $('usageStatisticsStatus').textContent = status
+      ? t('统计写入状态（本次运行累计，不随筛选变化）') + ' · ' + [
+        ['排队', status.queued], ['已接收', status.accepted], ['已处理', status.written],
+        ['已丢弃', status.dropped], ['写入失败', status.write_failed], ['未归属', status.unattributed],
+      ].map(([label, value]) => t(label) + ': ' + Number(value || 0).toLocaleString()).join(' · ') +
+        (status.dropped || status.write_failed || status.unattributed ? ' · ⚠ ' + t('统计记录可能不完整') : '')
+      : t('统计写入状态暂不可用');
     renderUsageModelFilter((state.overview && state.overview.used_models) || []);
     const pageData = recent || {};
     const byKey = (summary.by_key || []).map(normKeySum);
@@ -4875,9 +4925,9 @@
     const totalInput = byKey.reduce((sum, item) => sum + Number(item.inn || 0), 0);
     const totalOutput = byKey.reduce((sum, item) => sum + Number(item.out || 0), 0);
     $('usageStats').innerHTML = [
-      ['activity', '筛选请求数', totalRequests],
+      ['activity', '用量记录数', totalRequests],
       ['plug', t('兜底请求'), formatFallbackShare(totalFallback, totalRequests)],
-      ['coin', '筛选费用', formatMoney(totalCost)],
+      ['coin', t('用量费用') + ' ' + currencyCode(), formatMoney(totalCost)],
       ['trend', '输入 Token', formatTokens(totalInput)],
       ['layers', '输出 Token', formatTokens(totalOutput)],
     ].map(([icon, k, v]) => '<div class="stat"><div class="k"><span class="stat-icon" aria-hidden="true">'+uiIcon(icon)+'</span>'+esc(k)+'</div><div class="v">'+esc(v)+'</div></div>').join('');
@@ -4894,16 +4944,18 @@
     if (filter.source) filterLabels.push('来源: ' + filter.source);
     if (filter.served_api === '1') filterLabels.push(t('仅兜底请求'));
     if (filter.served_api === '0') filterLabels.push(t('仅绑定账号'));
-    if (filter.min_cost_micro_usd || filter.max_cost_micro_usd) filterLabels.push('费用范围');
+    if (filter.min_cost_micro_usd || filter.max_cost_micro_usd) filterLabels.push(t('用量费用') + ' USD');
     if (filter.min_tokens || filter.max_tokens) filterLabels.push('Token 范围');
+    const unpriced = byKey.reduce((sum, item) => sum + Number(item.unpriced || 0), 0);
+    if (unpriced) filterLabels.push(usageUnpricedText(unpriced));
     $('usageFilterState').textContent = filterLabels.length ? filterLabels.join(' · ') : '未设置筛选';
 
     const emptyState = message => '<div class="empty-state"><span>'+esc(message)+'</span></div>';
-    $('usageByKey').innerHTML = byKey.length ? '<div class="table-scroll"><table><thead><tr><th>密钥</th><th>请求数</th><th>'+esc(t('兜底'))+'</th><th>费用 '+esc(currencyCode())+'</th><th>in/out tokens</th></tr></thead><tbody>' +
-      byKey.map(x => '<tr><td><div><strong>'+esc(x.label||'(无标签)')+'</strong></div></td><td>'+esc(x.req)+'</td>'+fallbackShareCell(x.fb, x.req)+'<td title="'+esc(moneyTitle(x.cost))+'">'+esc(formatMoney(x.cost))+'</td><td title="'+esc(tokenTitle(x.inn)+' / '+tokenTitle(x.out))+'">'+esc(formatTokens(x.inn))+' / '+esc(formatTokens(x.out))+'</td></tr>').join('') +
+    $('usageByKey').innerHTML = byKey.length ? '<div class="table-scroll"><table><thead><tr><th>密钥</th><th>用量记录数</th><th>'+esc(t('兜底'))+'</th><th>用量费用 '+esc(currencyCode())+'</th><th>in/out tokens</th></tr></thead><tbody>' +
+      byKey.map(x => '<tr><td><div><strong>'+esc(x.label||'(无标签)')+'</strong></div></td><td>'+esc(x.req)+'</td>'+fallbackShareCell(x.fb, x.req)+'<td title="'+esc([moneyTitle(x.cost), usageUnpricedText(x.unpriced)].filter(Boolean).join(' · '))+'">'+esc(formatMoney(x.cost))+'</td><td title="'+esc(tokenTitle(x.inn)+' / '+tokenTitle(x.out))+'">'+esc(formatTokens(x.inn))+' / '+esc(formatTokens(x.out))+'</td></tr>').join('') +
       '</tbody></table></div><p class="table-swipe-hint">左右滑动查看完整汇总</p>' : emptyState('当前筛选条件下暂无按密钥汇总');
-    $('usageByModel').innerHTML = byModel.length ? '<div class="table-scroll"><table><thead><tr><th>模型</th><th>请求数</th><th>'+esc(t('兜底'))+'</th><th>费用 '+esc(currencyCode())+'</th><th>in/out tokens</th></tr></thead><tbody>' +
-      byModel.map(x => '<tr><td class="mono">'+esc(x.model)+'</td><td>'+esc(x.req)+'</td>'+fallbackShareCell(x.fb, x.req)+'<td title="'+esc(moneyTitle(x.cost))+'">'+esc(formatMoney(x.cost))+'</td><td title="'+esc(tokenTitle(x.inn)+' / '+tokenTitle(x.out))+'">'+esc(formatTokens(x.inn))+' / '+esc(formatTokens(x.out))+'</td></tr>').join('') +
+    $('usageByModel').innerHTML = byModel.length ? '<div class="table-scroll"><table><thead><tr><th>模型</th><th>用量记录数</th><th>'+esc(t('兜底'))+'</th><th>用量费用 '+esc(currencyCode())+'</th><th>in/out tokens</th></tr></thead><tbody>' +
+      byModel.map(x => '<tr><td class="mono">'+esc(x.model)+'</td><td>'+esc(x.req)+'</td>'+fallbackShareCell(x.fb, x.req)+'<td title="'+esc([moneyTitle(x.cost), usageUnpricedText(x.unpriced)].filter(Boolean).join(' · '))+'">'+esc(formatMoney(x.cost))+'</td><td title="'+esc(tokenTitle(x.inn)+' / '+tokenTitle(x.out))+'">'+esc(formatTokens(x.inn))+' / '+esc(formatTokens(x.out))+'</td></tr>').join('') +
       '</tbody></table></div><p class="table-swipe-hint">左右滑动查看完整汇总</p>' : emptyState('当前筛选条件下暂无按模型汇总');
     const formatOptional = (value, formatter) => value == null || value === '' ? '—' : formatter(value);
     const formatMilliseconds = value => formatOptional(value, v => {
@@ -4940,14 +4992,14 @@
       return '<td class="usage-key" title="'+esc(title)+'"><div class="usage-key-label"><span class="badge fallback">'+esc(t('兜底'))+'</span><strong>'+esc(servedText)+'</strong>'+(served ? '<div class="mono">'+esc(display)+'</div>' : '')+'</div></td>';
     };
 
-    $('usageRecent').innerHTML = items.length ? '<div class="table-scroll"><table class="usage-table"><thead><tr><th>时间</th><th>账号</th><th>API Key 名称</th><th>模型名称</th><th>来源</th><th>执行器</th><th>结果</th><th>首字延迟</th><th>生成时间</th><th>TPS</th><th>思考强度</th><th>输入</th><th>输出</th><th>思考</th><th>缓存读取</th><th>缓存创建</th><th>总 Token 数</th><th>缓存命中</th><th>费用 '+esc(currencyCode())+'</th></tr></thead><tbody>' +
+    $('usageRecent').innerHTML = items.length ? '<div class="table-scroll"><table class="usage-table"><thead><tr><th>时间</th><th>账号</th><th>API Key 名称</th><th>模型名称</th><th>来源</th><th>执行器</th><th>结果</th><th>首字延迟</th><th>生成时间</th><th>TPS</th><th>思考强度</th><th>输入</th><th>输出</th><th>思考</th><th>缓存读取</th><th>缓存创建</th><th>总 Token 数</th><th>缓存命中</th><th>用量费用 '+esc(currencyCode())+'</th></tr></thead><tbody>' +
       items.map(u => {
-        const settledCost = u.cost_micro_usd;
+        const costText = usageCostText(u);
         const cell = (value) => '<td title="'+esc(tokenTitle(value))+'">'+esc(formatTokens(value))+'</td>';
         return '<tr><td class="mono" title="'+esc(u.created_at)+'">'+esc(formatDateTime(u.created_at))+'</td>'+usageAuthCell(u)+'<td>'+esc(u.key_label || u.plugin_key_id || '—')+'</td>'+
           '<td class="mono model" title="'+esc(u.model)+'">'+esc(u.model)+'</td><td>'+esc(u.source || '—')+'</td><td class="mono">'+esc(u.executor_type || '—')+'</td><td>'+esc(u.result || '—')+'</td><td>'+esc(formatMilliseconds(u.first_token_latency_ms))+'</td><td>'+esc(formatMilliseconds(u.generation_duration_ms))+'</td><td>'+esc(formatTPS(u.tokens_per_second))+'</td><td>'+esc(u.thinking_intensity || '—')+'</td>'+
           cell(u.input_tokens || 0)+cell(u.output_tokens || 0)+cell(u.reasoning_tokens || 0)+cell(u.cache_read_tokens || 0)+cell(u.cache_creation_tokens || 0)+cell(totalUsageTokens(u))+
-          '<td>'+esc(cacheHit(u))+'</td><td title="'+esc(moneyTitle(settledCost))+'">'+esc(formatMoney(settledCost))+'</td></tr>';
+          '<td>'+esc(cacheHit(u))+'</td><td title="'+esc(usageCostTitle(u))+'">'+esc(costText)+'</td></tr>';
       }).join('') + '</tbody></table></div><p class="table-swipe-hint">左右滑动查看完整明细</p>' : emptyState('当前筛选条件下暂无使用明细');
     renderReleasedUsage();
     renderUsagePagination(pageData);

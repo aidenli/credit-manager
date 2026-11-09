@@ -22,6 +22,16 @@ func handleUsage(raw []byte) ([]byte, error) {
 	if svc == nil || len(raw) == 0 {
 		return okEnvelope(map[string]any{})
 	}
+	if svc.Config().AuthOnly {
+		if record, ok := decodeUsageStatistic(raw); ok {
+			// Attribution is exact principal lookup in the background writer. Internal
+			// probes without a customer principal are not guessed onto customer keys.
+			svc.ObserveUsageStatistic(record)
+		} else {
+			svc.DropUsageStatistic()
+		}
+		return okEnvelope(map[string]any{})
+	}
 	record, ok := decodeHostUsageRecord(raw)
 	if !ok {
 		return okEnvelope(map[string]any{})

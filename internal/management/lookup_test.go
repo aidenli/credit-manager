@@ -1079,9 +1079,9 @@ func TestConsolePricingEnableDisable(t *testing.T) {
 func TestLookupStatsIconsAndEmptyLayouts(t *testing.T) {
 	page := string(lookupPage().Body)
 	for _, text := range []string{
-		"['activity',t('请求数')",
+		"['activity',t('用量记录数')",
 		"['layers','Token'",
-		"['coin',t('费用')",
+		"['coin',t('用量费用')",
 		"['bolt',t('在途请求')",
 		"tr class=\"empty-row\"",
 		"share-body:has(.chart-empty)",

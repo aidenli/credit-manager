@@ -73,9 +73,10 @@ func usageSummary(ctx context.Context, svc *service.Service, query map[string][]
 		return jsonErr(http.StatusInternalServerError, err.Error()), nil
 	}
 	return jsonOKNoStore(map[string]any{
-		"by_key":   byKey,
-		"by_model": byModel,
-		"filters":  usageFilterView(filter),
+		"by_key":            byKey,
+		"by_model":          byModel,
+		"filters":           usageFilterView(filter),
+		"statistics_status": svc.UsageStatisticsStatus(),
 	}), nil
 }
 

@@ -19,7 +19,11 @@ func authenticate(raw []byte) ([]byte, error) {
 	if svc == nil {
 		return okEnvelope(pluginapi.FrontendAuthResponse{Authenticated: false})
 	}
-	var req pluginapi.FrontendAuthRequest
+	// Authentication never needs a body, even if an older host supplies one.
+	var req struct {
+		Method, Path string
+		Headers      http.Header
+	}
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return okEnvelope(pluginapi.FrontendAuthResponse{Authenticated: false})
 	}
@@ -62,6 +66,9 @@ func interceptRequestAfterAuth(raw []byte) ([]byte, error) {
 	if svc == nil {
 		return okEnvelope(pluginapi.RequestInterceptResponse{})
 	}
+	if svc.Config().AuthOnly {
+		return interceptStatisticsRequest(svc, raw)
+	}
 	var req pluginapi.RequestInterceptRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, err
@@ -75,15 +82,6 @@ func interceptRequestAfterAuth(raw []byte) ([]byte, error) {
 	if !isNativeImageProtocol(req.SourceFormat) && !service.IsImageOnlyModel(firstNonEmpty(req.RequestedModel, req.Model)) {
 		// CPA invokes this hook before its executor. Carry the lifecycle request ID
 		// into our executor, then remove it before the nested host model call.
-		if svc.Config().AuthOnly {
-			if err != nil {
-				return okEnvelope(quotaRejectResponse(http.StatusUnauthorized, err.Error()))
-			}
-			if !acquireKeySlot(requestID, key.ID, key.MaxConcurrentRequests) {
-				return okEnvelope(quotaRejectResponse(http.StatusTooManyRequests, store.ErrConcurrentLimit.Error()))
-			}
-			return okEnvelope(pluginapi.RequestInterceptResponse{})
-		}
 		if err == nil && req.Stream {
 			trackStreamLifecycle(requestID, svc)
 			return okEnvelope(pluginapi.RequestInterceptResponse{Headers: http.Header{
@@ -128,6 +126,14 @@ func completeInterceptedRequest(raw []byte) ([]byte, error) {
 	if svc == nil {
 		return okEnvelope(map[string]any{})
 	}
+	if svc.Config().AuthOnly {
+		var req struct{ RequestID string }
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return nil, err
+		}
+		releaseKeySlot(strings.TrimSpace(req.RequestID))
+		return okEnvelope(map[string]any{})
+	}
 	var req pluginapi.RequestCompletion
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, err
@@ -161,7 +167,7 @@ func completeInterceptedRequest(raw []byte) ([]byte, error) {
 
 func interceptModelDirectoryResponse(raw []byte) ([]byte, error) {
 	svc := service.Current()
-	if svc == nil {
+	if svc == nil || svc.Config().AuthOnly {
 		return okEnvelope(pluginapi.ResponseInterceptResponse{})
 	}
 	var req pluginapi.ResponseInterceptRequest

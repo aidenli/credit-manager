@@ -47,7 +47,14 @@ func pickAuth(raw []byte) ([]byte, error) {
 		return okEnvelope(pluginapi.SchedulerPickResponse{AuthID: authID, Handled: true})
 	}
 	ctx := service.WithSchedulerMetadata(context.Background(), req.Options.Metadata)
-	authID, handled, err := svc.PickAuthForKey(ctx, req.Options.Headers, candidates, req.Model)
+	authID, handled, decision, err := svc.PickAuthForKeyWithDecision(ctx, req.Options.Headers, candidates, req.Model)
+	if decision != nil {
+		// One JSON line survives host formatters that omit structured log fields.
+		// This best-effort host callback runs after the scheduler lock is released.
+		if payload, encodeErr := json.Marshal(decision); encodeErr == nil {
+			hostLog("info", "credit-manager session-routing "+string(payload), nil, "")
+		}
+	}
 	if err != nil {
 		return errorEnvelope(authPickErrorCode(err), err.Error()), nil
 	}

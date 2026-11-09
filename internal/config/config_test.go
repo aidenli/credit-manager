@@ -10,6 +10,17 @@ import (
 	"time"
 )
 
+func TestSessionRoutingLogConfig(t *testing.T) {
+	t.Setenv(ConfigFileEnv, "")
+	if Default().SessionAffinity.LogDecisions {
+		t.Fatal("routing logs must default off")
+	}
+	cfg, err := parseYAML([]byte("session_affinity:\n  log_decisions: true\n"), true)
+	if err != nil || !cfg.SessionAffinity.LogDecisions {
+		t.Fatalf("monitoring switch not parsed: %+v %v", cfg.SessionAffinity, err)
+	}
+}
+
 func TestDefaultStaleReservationTimeout(t *testing.T) {
 	if got := Default().Stream.StaleReservationTimeout; got != 2*time.Hour {
 		t.Fatalf("default stale timeout = %s, want 2h", got)

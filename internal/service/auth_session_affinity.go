@@ -130,8 +130,13 @@ func (s *Service) sessionAffinityTTL() time.Duration {
 // sticks to is the same one the host would consider, but only header sources are
 // available here (the scheduler does not receive the request body).
 func sessionAffinityID(headers http.Header) string {
+	id, _ := headerSessionIdentity(headers)
+	return id
+}
+
+func headerSessionIdentity(headers http.Header) (string, string) {
 	if headers == nil {
-		return ""
+		return "", "none"
 	}
 	headerValue := func(name string) string {
 		if value := strings.TrimSpace(headers.Get(name)); value != "" {
@@ -157,10 +162,10 @@ func sessionAffinityID(headers http.Header) string {
 		{"X-Client-Request-Id", "clientreq:"},
 	} {
 		if value := headerValue(candidate.name); value != "" {
-			return candidate.prefix + value
+			return candidate.prefix + value, candidate.name
 		}
 	}
-	return ""
+	return "", "none"
 }
 
 // Host scheduler metadata keys (sdk/cliproxy/executor). The host resolves the
@@ -192,17 +197,22 @@ func metadataSessionString(metadata map[string]any, key string) string {
 // host-derived conversation identity, then the plugin's own header extraction
 // (for hosts that do not forward metadata).
 func requestSessionAffinityID(ctx context.Context, headers http.Header) string {
+	id, _ := requestSessionIdentity(ctx, headers)
+	return id
+}
+
+func requestSessionIdentity(ctx context.Context, headers http.Header) (string, string) {
 	if ctx != nil {
 		if metadata, _ := ctx.Value(schedulerMetadataContextKey{}).(map[string]any); len(metadata) > 0 {
 			if id := metadataSessionString(metadata, hostCanonicalSessionMetadataKey); id != "" {
-				return "host:" + id
+				return "host:" + id, "host_canonical"
 			}
 			if id := metadataSessionString(metadata, hostDerivedSessionMetadataKey); id != "" {
-				return "derived:" + id
+				return "derived:" + id, "host_derived"
 			}
 		}
 	}
-	return sessionAffinityID(headers)
+	return headerSessionIdentity(headers)
 }
 
 func sessionAffinityKey(provider, sessionID, model string) string {
@@ -271,19 +281,30 @@ func (s *Service) sessionAffinityLookupLocked(key string, available []AuthPickCa
 // With affinity disabled this is exactly the previous rotation behaviour
 // (keyScope is the per-key cursor scope the caller previously passed).
 // Callers must hold authMu.
-func (s *Service) chooseBoundAuthLocked(keyScope, provider, sessionID, model string, available []AuthPickCandidate, now time.Time) AuthPickCandidate {
+func (s *Service) chooseBoundAuthLocked(keyScope, provider, sessionID, model string, available []AuthPickCandidate, now time.Time) (AuthPickCandidate, string) {
 	if len(available) == 0 {
-		return AuthPickCandidate{}
+		return AuthPickCandidate{}, "no_candidates"
 	}
 	if s.sessionAffinityEnabled() && sessionID != "" {
 		key := sessionAffinityKey(provider, sessionID, model)
+		reason := "new_binding"
+		if previous, ok := s.sessionAffinity[key]; ok {
+			reason = "unavailable_rebind"
+			if !previous.expires.After(now) {
+				reason = "expired_rebind"
+			}
+		}
 		if bound, ok := s.sessionAffinityLookupLocked(key, available, now); ok {
-			return bound
+			return bound, "affinity_hit"
 		}
 		// First pick for this session: rotate with the shared cursor, then bind.
 		chosen := s.nextWeightedAuthPickLocked(authPickScopeAffinity, available)
 		s.bindSessionAffinityLocked(key, authLimitProvider(chosen.Provider), chosen.ID, now)
-		return chosen
+		return chosen, reason
 	}
-	return s.nextWeightedAuthPickLocked(keyScope, available)
+	reason := "affinity_disabled"
+	if s.sessionAffinityEnabled() {
+		reason = "no_session"
+	}
+	return s.nextWeightedAuthPickLocked(keyScope, available), reason
 }

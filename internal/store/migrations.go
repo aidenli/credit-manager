@@ -507,6 +507,72 @@ var migrations = []migration{
 			)`,
 		},
 	},
+	{
+		version: 33,
+		name:    "independent usage statistics and reporting view",
+		up: []string{
+			// Attribution only: statistics never reference or mutate financial records.
+			`CREATE TABLE usage_statistics (
+				id TEXT PRIMARY KEY NOT NULL CHECK (length(trim(id)) > 0),
+				reservation_id TEXT NOT NULL DEFAULT '' CHECK (reservation_id = ''),
+				caller_id TEXT NOT NULL DEFAULT '',
+				plugin_key_id TEXT NOT NULL DEFAULT '',
+				executor_type TEXT,
+				model TEXT NOT NULL CHECK (length(trim(model)) > 0),
+				pricing_rule_id TEXT,
+				input_tokens INTEGER NOT NULL CHECK (input_tokens >= 0),
+				output_tokens INTEGER NOT NULL CHECK (output_tokens >= 0),
+				reasoning_tokens INTEGER NOT NULL CHECK (reasoning_tokens >= 0),
+				cached_tokens INTEGER NOT NULL CHECK (cached_tokens >= 0),
+				cache_read_tokens INTEGER NOT NULL CHECK (cache_read_tokens >= 0),
+				cache_creation_tokens INTEGER NOT NULL CHECK (cache_creation_tokens >= 0),
+				total_tokens INTEGER NOT NULL CHECK (total_tokens >= 0),
+				cost_micro_usd INTEGER NOT NULL DEFAULT 0 CHECK (cost_micro_usd = 0),
+				estimated_cost_micro_usd INTEGER NOT NULL CHECK (estimated_cost_micro_usd >= 0),
+				source TEXT NOT NULL DEFAULT 'statistics' CHECK (source = 'statistics'),
+				tier TEXT,
+				result TEXT,
+				first_token_latency_ms INTEGER,
+				generation_duration_ms INTEGER,
+				tokens_per_second REAL,
+				thinking_intensity TEXT,
+				auth_id TEXT,
+				auth_index TEXT,
+				auth_name TEXT,
+				auth_label TEXT,
+				auth_provider TEXT,
+				auth_type TEXT,
+				auth_email TEXT,
+				auth_path TEXT,
+				served_api INTEGER NOT NULL DEFAULT 0 CHECK (served_api IN (0, 1)),
+				served_provider TEXT NOT NULL DEFAULT '',
+				created_at_unix_ms INTEGER NOT NULL
+			)`,
+			`CREATE INDEX usage_statistics_created_idx ON usage_statistics(created_at_unix_ms)`,
+			`CREATE INDEX usage_statistics_caller_created_idx ON usage_statistics(caller_id, created_at_unix_ms)`,
+			`CREATE INDEX usage_statistics_key_created_idx ON usage_statistics(plugin_key_id, created_at_unix_ms)`,
+			`CREATE INDEX usage_statistics_auth_created_idx ON usage_statistics(auth_provider, auth_id, created_at_unix_ms)`,
+			`CREATE INDEX usage_statistics_auth_index_created_idx ON usage_statistics(auth_provider, auth_index, created_at_unix_ms)`,
+			// Explicit columns keep both arms identical regardless of ledger ALTER order.
+			// This view is for display only; enforcement must keep reading usage_ledger.
+			`CREATE VIEW usage_reporting AS
+			SELECT id, reservation_id, caller_id, plugin_key_id, executor_type, model, pricing_rule_id,
+				input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_read_tokens,
+				cache_creation_tokens, total_tokens, cost_micro_usd, estimated_cost_micro_usd, source,
+				tier, result, first_token_latency_ms, generation_duration_ms, tokens_per_second, thinking_intensity,
+				auth_id, auth_index, auth_name, auth_label, auth_provider, auth_type, auth_email, auth_path,
+				served_api, served_provider, created_at_unix_ms
+			FROM usage_ledger
+			UNION ALL
+			SELECT id, reservation_id, caller_id, plugin_key_id, executor_type, model, pricing_rule_id,
+				input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_read_tokens,
+				cache_creation_tokens, total_tokens, cost_micro_usd, estimated_cost_micro_usd, source,
+				tier, result, first_token_latency_ms, generation_duration_ms, tokens_per_second, thinking_intensity,
+				auth_id, auth_index, auth_name, auth_label, auth_provider, auth_type, auth_email, auth_path,
+				served_api, served_provider, created_at_unix_ms
+			FROM usage_statistics`,
+		},
+	},
 }
 
 // Migrate applies every pending migration transactionally.

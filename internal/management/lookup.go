@@ -171,6 +171,8 @@ func lookupUsageSummaryView(summary store.UsageFilteredSummary) map[string]any {
 		"cache_creation_tokens": summary.CacheCreationTokens,
 		"total_tokens":          summary.TotalTokens,
 		"cost_micro_usd":        summary.CostMicroUSD,
+		"usage_cost_micro_usd":  summary.UsageCostMicroUSD,
+		"unpriced_count":        summary.UnpricedCount,
 	}
 }
 
@@ -222,7 +224,11 @@ func publicUsageView(entry store.UsageEntry) map[string]any {
 		"total_tokens":             money.ReportedTotal(entry.Usage),
 		"cost_micro_usd":           entry.CostMicroUSD,
 		"estimated_cost_micro_usd": entry.EstimatedCostMicroUSD,
+		"usage_cost_micro_usd":     entry.UsageCostMicroUSD,
+		"usage_cost_status":        entry.UsageCostStatus,
 		"source":                   entry.Source,
+		"statistics_only":          entry.Source == "statistics",
+		"price_known":              entry.Source != "statistics" || entry.PricingRuleID != nil || entry.UsageCostStatus == "free",
 		"result":                   entry.Metrics.Result,
 		"first_token_latency_ms":   durationMilliseconds(entry.Metrics.FirstTokenLatency),
 		"generation_duration_ms":   durationMilliseconds(entry.Metrics.GenerationDuration),

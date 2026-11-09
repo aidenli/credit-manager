@@ -78,6 +78,9 @@ func pluginRegistration(schemaVersion uint32) registration {
 	if authOnly {
 		// Executor and model router are the two hooks that receive full request
 		// bodies; dropping them leaves the host to execute natively.
+		// Model-directory response filtering is deliberately disabled: a generic
+		// response hook would transport normal response bodies into the plugin.
+		reg.Capabilities.ResponseInterceptor = false
 		reg.Capabilities.ModelRouter = false
 		reg.Capabilities.Executor = false
 		reg.Capabilities.ExecutorModelScope = ""

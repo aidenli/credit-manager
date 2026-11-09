@@ -17,7 +17,7 @@ import (
 const (
 	PluginID      = "credit-manager"
 	PluginName    = "CPA Credit Manager"
-	PluginVersion = "1.8.34"
+	PluginVersion = "1.8.37"
 	// CallerScopeMetadataKey mirrors sdk/cliproxy/executor.CallerScopeMetadataKey.
 	CallerScopeMetadataKey = "caller_scope"
 )
@@ -51,6 +51,8 @@ type Service struct {
 	// hitting the same OAuth account. Guarded by authMu (shared across
 	// reconfigure), like authWeightedPick.
 	sessionAffinity map[string]sessionBinding
+	// routingMonitor is lazy, bounded scalar state guarded by authMu; no log queue.
+	routingMonitor *sessionRoutingMonitor
 	// sessionAffinityState caches the effective toggle for the hot path; the
 	// mutex only guards the one-time/miss load from the database.
 	sessionAffinityState   atomic.Pointer[sessionAffinityState]
@@ -62,6 +64,7 @@ type Service struct {
 	directorySyncer     ModelDirectorySyncer
 	directoryIDsMu      sync.Mutex
 	lastDirectoryIDs    []string
+	statistics          *usageStatisticsWriter
 }
 
 // authMutex is copy-safe because it shares its underlying lock. A same-store
@@ -133,6 +136,7 @@ func Open(ctx context.Context, cfg config.Config) (*Service, error) {
 		_ = svc.Close()
 		return nil, fmt.Errorf("release stale reservations: %w", err)
 	}
+	svc.statistics = newUsageStatisticsWriter(st)
 	svc.RefreshModelDirectory(ctx)
 	return svc, nil
 }
@@ -143,6 +147,7 @@ func (s *Service) Close() error {
 	}
 	s.StopAuthWarmup()
 	s.StopOAuthTestScheduler()
+	s.statistics.close()
 	return s.store.Close()
 }
 
@@ -207,6 +212,7 @@ func Configure(ctx context.Context, rawYAML []byte) error {
 		}
 		// Keep the locked SQLite writer. Opening a second handle deadlocks on *.db.lock.
 		next := &Service{cfg: cfg, peppers: peppers, store: old.store, authCond: old.authCond, authPending: old.authPending, warmupHolds: old.warmupHolds}
+		next.statistics = old.statistics
 		next.authMu.shared = old.authMu.shared
 		next.SetAuthQuotaSource(old.authQuotaSourceValue())
 		next.SetAuthWarmupExecutor(old.authWarmupExecutorValue())
@@ -250,6 +256,7 @@ func Configure(ctx context.Context, rawYAML []byte) error {
 		_ = svc.Close()
 		return fmt.Errorf("release stale reservations: %w", err)
 	}
+	svc.statistics = newUsageStatisticsWriter(st)
 	current.Store(svc)
 	svc.RefreshModelDirectory(ctx)
 	return nil

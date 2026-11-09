@@ -92,6 +92,9 @@ const ConfigFileEnv = "CREDIT_MANAGER_CONFIG_FILE"
 type SessionAffinityConfig struct {
 	Enabled bool          `yaml:"enabled" json:"enabled"`
 	TTL     time.Duration `yaml:"ttl" json:"ttl"`
+	// LogDecisions emits body-free, pseudonymous scheduler decisions to host.log.
+	// Off by default; includes sticky hits so reused client session IDs are visible.
+	LogDecisions bool `yaml:"log_decisions" json:"log_decisions"`
 }
 
 // APIFallbackConfig names the API provider a failed OAuth attempt is replayed
@@ -149,10 +152,12 @@ type Config struct {
 	Stream          StreamConfig          `yaml:"stream" json:"stream"`
 	SessionAffinity SessionAffinityConfig `yaml:"session_affinity" json:"session_affinity"`
 	APIFallback     APIFallbackConfig     `yaml:"api_fallback" json:"api_fallback"`
-	// AuthOnly skips the plugin executor and model router so request bodies are
-	// never copied into the plugin. Key auth, permission/priority scheduling,
-	// session affinity and the Key concurrency cap stay active. Text billing,
-	// quotas and legacy executor replay are off; native host retries remain active.
+	// AuthOnly skips the executor, model router and generic response interceptor.
+	// On hosts supporting schema 7, normal request/response bodies are omitted.
+	// Key auth, model permissions, scheduling and concurrency caps stay active.
+	// All billing (including image holds), quotas and executor replay are off;
+	// native host retries and independent best-effort usage statistics stay on.
+	// Usage error bodies may still be copied by the host/ABI before we discard them.
 	// Takes effect on CPA restart (registration is read once).
 	AuthOnly bool `yaml:"auth_only" json:"auth_only"`
 }
