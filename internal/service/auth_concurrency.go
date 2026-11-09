@@ -80,10 +80,8 @@ func authStatusDisabled(status string) bool {
 	return strings.EqualFold(strings.TrimSpace(status), "disabled")
 }
 
-// authStatusErrored reports the host's advisory error flag. It never vetoes a pick,
-// because an account can only clear that flag by serving a request — honoring it
-// would lock the credential out permanently and hand every request of a bound key
-// to the API-provider fallback. A healthy sibling is still preferred.
+// authStatusErrored identifies an advisory host flag for diagnostics only.
+// The host owns cooldown eligibility; a historical error must not veto a pick.
 func authStatusErrored(status string) bool {
 	return strings.EqualFold(strings.TrimSpace(status), "error")
 }
@@ -313,10 +311,8 @@ func (s *Service) pickAuthForKey(ctx context.Context, headers http.Header, candi
 		if _, ok := bound[provider+"\x00"+id]; len(bindings) > 0 && !ok && !authProviderIsAPI(provider) {
 			continue
 		}
-		// The host's status is a snapshot taken when the candidate list was built.
-		// Only an explicit disable removes an account here; an advisory "error"
-		// flag must not black out a key's own account, so it is handled by
-		// preferring healthy siblings below instead.
+		// The host already checks cooldown eligibility for this request/model.
+		// Only an explicit disable vetoes a pick, not a historical error flag.
 		if authStatusDisabled(candidate.Status) {
 			continue
 		}
@@ -341,7 +337,10 @@ func (s *Service) pickAuthForKey(ctx context.Context, headers http.Header, candi
 	// Weight only orders credentials inside the highest tier, like the host's
 	// weighted selector: a tier whose weights are all non-positive fails rather
 	// than promoting a lower-priority credential.
-	available = positiveWeightAuths(highestPriorityAuths(available))
+	availableCount := len(available)
+	available = highestPriorityAuths(available)
+	priorityCount := len(available)
+	available = positiveWeightAuths(available)
 	if len(available) == 0 {
 		if len(bindings) == 0 {
 			return "", true, store.ErrConcurrentLimit
@@ -355,16 +354,17 @@ func (s *Service) pickAuthForKey(ctx context.Context, headers http.Header, candi
 	if s.sessionAffinityEnabled() {
 		sessionID = requestSessionAffinityID(ctx, headers)
 	}
-	// Health is advisory within the highest tier, never a reason to promote a
-	// lower-priority credential. An errored-only tier can still recover by serving.
-	pickFrom := available
-	if healthy := withoutErroredAuths(available); len(healthy) > 0 {
-		pickFrom = healthy
-	}
+	// A host-offered error candidate must be allowed to recover by serving.
+	// Re-filtering on its historical status would starve it behind healthy peers.
 	now := time.Now()
-	chosen, reason := s.chooseBoundAuthLocked(key.ID+"\x00"+provider, provider, sessionID, strings.TrimSpace(model), pickFrom, now)
+	chosen, reason := s.chooseBoundAuthLocked(key.ID+"\x00"+provider, provider, sessionID, strings.TrimSpace(model), available, now)
 	if decision != nil {
-		s.captureSessionRoutingDecisionLocked(decision, ctx, headers, key.ID, model, reason, chosen, pickFrom, now)
+		s.captureSessionRoutingDecisionLocked(decision, ctx, headers, key.ID, model, reason, chosen, available, now)
+		decision.HostCandidateCount = len(candidates)
+		decision.ExcludedScopeCount = len(candidates) - len(scoped)
+		decision.ExcludedBusyCount = len(scoped) - availableCount
+		decision.ExcludedPriorityCount = availableCount - priorityCount
+		decision.ExcludedWeightCount = priorityCount - len(available)
 	}
 	s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: strings.TrimSpace(chosen.ID), Provider: chosen.Provider})
 	return strings.TrimSpace(chosen.ID), true, nil
@@ -387,18 +387,6 @@ func highestPriorityAuths(candidates []AuthPickCandidate) []AuthPickCandidate {
 		if candidate.Priority == priority {
 			out = append(out, candidate)
 		}
-	}
-	return out
-}
-
-// withoutErroredAuths returns the candidates the host did not flag as errored.
-func withoutErroredAuths(candidates []AuthPickCandidate) []AuthPickCandidate {
-	out := make([]AuthPickCandidate, 0, len(candidates))
-	for _, candidate := range candidates {
-		if authStatusErrored(candidate.Status) {
-			continue
-		}
-		out = append(out, candidate)
 	}
 	return out
 }

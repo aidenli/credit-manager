@@ -183,9 +183,6 @@ func TestPickAuthForKeyRotatesEachKeyIndependently(t *testing.T) {
 	}
 }
 
-// An account the host has marked error/disabled must never be selected, even
-// though it is still in the candidate list: the status is a snapshot and the
-// account can go bad between list construction and the pick.
 // Only an explicit disable fails closed. An advisory "error" flag must NOT black
 // out a key's own account: an account can only clear that flag by serving a
 // request, so honoring it here strands the key on the fallback forever (and, once
@@ -236,30 +233,32 @@ func TestPickAuthForKeyUsesErroredAccountWhenItIsTheOnlyOption(t *testing.T) {
 	}
 }
 
-// A bad account must be passed over for a healthy sibling in the same binding.
-func TestPickAuthForKeyPrefersHealthyBoundAccount(t *testing.T) {
-	s := quotaService(t)
-	ctx := context.Background()
-	key, headers := boundKey(t, s, "mixed-status")
-	if err := s.Store().ReplaceKeyAuthBindings(ctx, key.ID, []store.KeyAuthBinding{
-		{Provider: "codex", AuthID: "account-1"},
-		{Provider: "codex", AuthID: "account-2"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	candidates := []AuthPickCandidate{
-		{ID: "account-1", Provider: "codex", Status: "error"},
-		{ID: "account-2", Provider: "codex", Status: "active"},
-	}
-	for i := 0; i < 3; i++ {
-		id, handled, err := s.PickAuthForKey(ctx, headers, candidates, "gpt-5")
-		if err != nil || !handled || id != "account-2" {
-			t.Fatalf("pick %d = (%q, %t, %v), want account-2", i, id, handled, err)
+// A host-offered historical error participates in weighted new-session routing.
+func TestPickAuthForKeyWeightsHistoricalErrors(t *testing.T) {
+	for _, bound := range []bool{false, true} {
+		s, key, headers := affinityService(t, true)
+		if bound {
+			bindTwo(t, s, key.ID)
+		}
+		candidates := []AuthPickCandidate{
+			{ID: "account-1", Provider: "codex", Priority: 2, Weight: 1, Status: "active"},
+			{ID: "account-2", Provider: "codex", Priority: 2, Weight: 3, Status: " ERROR "},
+		}
+		counts := map[string]int{}
+		for _, session := range []string{"one", "two", "three", "four"} {
+			id, handled, err := s.PickAuthForKey(context.Background(), sessionHeaders(headers, session), candidates, "gpt-5")
+			if err != nil || !handled {
+				t.Fatalf("bound=%t pick=(%q,%t,%v)", bound, id, handled, err)
+			}
+			counts[id]++
+		}
+		if counts["account-1"] != 1 || counts["account-2"] != 3 {
+			t.Fatalf("bound=%t expected 1:3 including historical error, got %v", bound, counts)
 		}
 	}
 }
 
-// Only the terminal bad states are rejected: transient and unknown statuses must
+// Only explicit disable is rejected: transient and unknown statuses must
 // stay usable, otherwise a host that adds a new status value would break routing.
 func TestPickAuthForKeyAcceptsNonTerminalStatuses(t *testing.T) {
 	for _, status := range []string{"", "active", "pending", "refreshing", "unknown", "some-future-state"} {

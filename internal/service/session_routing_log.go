@@ -18,33 +18,40 @@ const maxRoutingLogCandidates = 64
 // Session/key hashes use an ephemeral private HMAC key; account hashes are stable
 // SHA-256 pseudonyms so operators can map known accounts without logging their IDs.
 type SessionRoutingDecision struct {
-	Epoch               string               `json:"routing_epoch"`
-	Sequence            uint64               `json:"sequence"`
-	At                  string               `json:"at"`
-	Reason              string               `json:"reason"`
-	SessionHash         string               `json:"session_hash,omitempty"`
-	SessionSource       string               `json:"session_source"`
-	HeaderSessionHash   string               `json:"header_session_hash,omitempty"`
-	HeaderSessionSource string               `json:"header_session_source"`
-	BindingHash         string               `json:"binding_hash,omitempty"`
-	KeyHash             string               `json:"key_hash"`
-	Model               string               `json:"model"`
-	AffinityEnabled     bool                 `json:"affinity_enabled"`
-	TTLSeconds          int64                `json:"ttl_seconds"`
-	SelectionScope      string               `json:"selection_scope"`
-	ChosenAuthHash      string               `json:"chosen_auth_hash"`
-	ChosenProvider      string               `json:"chosen_provider"`
-	ChosenWeight        int64                `json:"chosen_weight"`
-	CandidateCount      int                  `json:"candidate_count"`
-	CandidatesTruncated bool                 `json:"candidates_truncated"`
-	Candidates          []SessionRoutingAuth `json:"candidates"`
+	Epoch               string `json:"routing_epoch"`
+	Sequence            uint64 `json:"sequence"`
+	At                  string `json:"at"`
+	Reason              string `json:"reason"`
+	SessionHash         string `json:"session_hash,omitempty"`
+	SessionSource       string `json:"session_source"`
+	HeaderSessionHash   string `json:"header_session_hash,omitempty"`
+	HeaderSessionSource string `json:"header_session_source"`
+	BindingHash         string `json:"binding_hash,omitempty"`
+	KeyHash             string `json:"key_hash"`
+	Model               string `json:"model"`
+	AffinityEnabled     bool   `json:"affinity_enabled"`
+	TTLSeconds          int64  `json:"ttl_seconds"`
+	SelectionScope      string `json:"selection_scope"`
+	ChosenAuthHash      string `json:"chosen_auth_hash"`
+	ChosenProvider      string `json:"chosen_provider"`
+	ChosenWeight        int64  `json:"chosen_weight"`
+	// Exclusion counts cover plugin filters only; the host already filtered eligibility.
+	HostCandidateCount    int                  `json:"host_candidate_count"`
+	ExcludedScopeCount    int                  `json:"excluded_scope_count"` // invalid, disabled, or unauthorized
+	ExcludedBusyCount     int                  `json:"excluded_busy_count"`  // concurrency or warmup
+	ExcludedPriorityCount int                  `json:"excluded_priority_count"`
+	ExcludedWeightCount   int                  `json:"excluded_weight_count"`
+	CandidateCount        int                  `json:"candidate_count"`
+	CandidatesTruncated   bool                 `json:"candidates_truncated"`
+	Candidates            []SessionRoutingAuth `json:"candidates"`
 }
 
 type SessionRoutingAuth struct {
-	AuthHash string `json:"auth_hash"`
-	Provider string `json:"provider"`
-	Priority int    `json:"priority"`
-	Weight   int64  `json:"weight"`
+	AuthHash  string `json:"auth_hash"`
+	Provider  string `json:"provider"`
+	Priority  int    `json:"priority"`
+	Weight    int64  `json:"weight"`
+	HostError bool   `json:"host_error"`
 }
 
 type sessionRoutingMonitor struct {
@@ -99,7 +106,7 @@ func (s *Service) captureSessionRoutingDecisionLocked(out *SessionRoutingDecisio
 			break
 		}
 		out.Candidates = append(out.Candidates, SessionRoutingAuth{
-			AuthHash: routingAuthHash(candidate), Provider: routingLogText(candidate.Provider), Priority: candidate.Priority, Weight: effectiveAuthWeight(candidate),
+			AuthHash: routingAuthHash(candidate), Provider: routingLogText(candidate.Provider), Priority: candidate.Priority, Weight: effectiveAuthWeight(candidate), HostError: authStatusErrored(candidate.Status),
 		})
 	}
 }

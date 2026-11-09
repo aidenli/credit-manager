@@ -94,6 +94,61 @@ func TestSessionRoutingLogReasonsAndHostIdentity(t *testing.T) {
 	}
 }
 
+func TestSessionRoutingHistoricalErrorKeepsAffinity(t *testing.T) {
+	s, key, headers := affinityService(t, true)
+	s.cfg.SessionAffinity.LogDecisions = true
+	candidates := bindTwo(t, s, key.ID)
+	h := sessionHeaders(headers, "recoverable-session")
+	ctx := context.Background()
+	id, _, _, err := s.PickAuthForKeyWithDecision(ctx, h, candidates, "gpt-5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var other []AuthPickCandidate
+	for i := range candidates {
+		if candidates[i].ID == id {
+			candidates[i].Status = "error"
+		} else {
+			other = append(other, candidates[i])
+		}
+	}
+	picked, _, d, err := s.PickAuthForKeyWithDecision(ctx, h, candidates, "gpt-5")
+	if err != nil || d == nil || picked != id || d.Reason != "affinity_hit" || d.CandidateCount != 2 || d.HostCandidateCount != 2 {
+		t.Fatalf("historical status must not rebind: %q %+v %v", picked, d, err)
+	}
+	flagged := 0
+	for _, c := range d.Candidates {
+		if c.HostError {
+			flagged++
+		}
+	}
+	if flagged != 1 {
+		t.Fatalf("expected one advisory error in diagnostics: %+v", d)
+	}
+	picked, _, d, err = s.PickAuthForKeyWithDecision(ctx, h, other, "gpt-5")
+	if err != nil || d == nil || picked == id || d.Reason != "unavailable_rebind" || d.CandidateCount != 1 {
+		t.Fatalf("host removal must still rebind: %q %+v %v", picked, d, err)
+	}
+}
+
+func TestSessionRoutingLogExclusionCounts(t *testing.T) {
+	s, key, headers := affinityService(t, true)
+	s.cfg.SessionAffinity.LogDecisions = true
+	candidates := bindTwo(t, s, key.ID)
+	candidates[0].Priority = 2
+	candidates[1].Priority = 2
+	candidates[1].Weight = -1
+	candidates = append(candidates,
+		AuthPickCandidate{ID: "unbound", Provider: "codex", Priority: 2},
+		AuthPickCandidate{ID: "disabled", Provider: "openai-compatible-api", Status: "disabled"},
+		AuthPickCandidate{ID: "lower", Provider: "openai-compatible-api", Priority: 1},
+	)
+	_, _, d, err := s.PickAuthForKeyWithDecision(context.Background(), headers, candidates, "gpt-5")
+	if err != nil || d == nil || d.HostCandidateCount != 5 || d.ExcludedScopeCount != 2 || d.ExcludedBusyCount != 0 || d.ExcludedPriorityCount != 1 || d.ExcludedWeightCount != 1 || d.CandidateCount != 1 {
+		t.Fatalf("wrong exclusion counts: %+v %v", d, err)
+	}
+}
+
 func TestSessionRoutingLogSnapshotBounded(t *testing.T) {
 	s := &Service{}
 	s.setSessionAffinityRuntime(true, time.Hour)

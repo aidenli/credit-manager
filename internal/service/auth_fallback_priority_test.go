@@ -58,11 +58,12 @@ func TestBoundSchedulerAvailabilityPrecedesPriority(t *testing.T) {
 	for _, hold := range []string{"concurrency", "warmup"} {
 		t.Run(hold, func(t *testing.T) {
 			s := fallbackService(t, false)
+			s.cfg.SessionAffinity.LogDecisions = true
 			ctx := context.Background()
 			key, headers := boundKey(t, s, "available-first")
 			bindOneAccount(t, s, key.ID, "high")
 			candidates := []AuthPickCandidate{
-				{ID: "high", Provider: "codex", Priority: 2},
+				{ID: "high", Provider: "codex", Priority: 2, Status: "error"},
 				{ID: apiAccount1, Provider: apiProvider, Priority: 1},
 			}
 			identity := store.AuthIdentity{AuthID: "high", Provider: "codex"}
@@ -77,9 +78,12 @@ func TestBoundSchedulerAvailabilityPrecedesPriority(t *testing.T) {
 			} else if err := s.AcquireAuthWarmup(ctx, "warmup", identity); err != nil {
 				t.Fatal(err)
 			}
-			id, handled, err := s.PickAuthForKey(ctx, headers, candidates, "model")
+			id, handled, decision, err := s.PickAuthForKeyWithDecision(ctx, headers, candidates, "model")
 			if err != nil || !handled || id != apiAccount1 {
 				t.Fatalf("held highest tier must not hide available API = (%q, %v, %v)", id, handled, err)
+			}
+			if decision == nil || decision.HostCandidateCount != 2 || decision.ExcludedBusyCount != 1 || decision.CandidateCount != 1 {
+				t.Fatalf("availability exclusion diagnostics: %+v", decision)
 			}
 			if hold == "concurrency" {
 				s.FinishAuthCapture("occupied")
