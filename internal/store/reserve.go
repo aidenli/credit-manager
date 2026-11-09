@@ -324,12 +324,15 @@ func (s *Store) GetReservation(ctx context.Context, reservationID string) (Reser
 	return scanReservation(s.db.QueryRowContext(ctx, reservationSelect+` WHERE id = ?`, reservationID))
 }
 
-// ReleasedReservation is one attempt that never produced a usage row: its hold
-// was released with a reason instead. Retries make most of these invisible to the
-// client, but the reason text is the only record of what the upstream said, and
-// the plugin used to discard it.
+// ReleasedReservation is a failed attempt: either a released hold, or (when
+// requested) a local rejection with no hold. Kind distinguishes the two; rejected
+// rows have zero HeldMicroUSD and nil ReleasedAt. RequestID and StatusCode are
+// populated only for rejections because reservations do not record those fields.
 type ReleasedReservation struct {
 	ID           string
+	Kind         string
+	RequestID    string
+	StatusCode   int
 	PluginKeyID  string
 	KeyLabel     string
 	Model        string
@@ -341,23 +344,34 @@ type ReleasedReservation struct {
 
 // ReleasedReservationFilter selects released attempts for the console list.
 type ReleasedReservationFilter struct {
-	CallerID    string
-	PluginKeyID string
-	Model       string
-	From        *time.Time
-	To          *time.Time
-	Limit       int
-	Offset      int
+	CallerID        string
+	PluginKeyID     string
+	Model           string
+	From            *time.Time
+	To              *time.Time
+	Limit           int
+	Offset          int
+	IncludeRejected bool
 }
 
-// ListReleasedReservations returns released attempts and their total count,
-// newest first.
+// ListReleasedReservations returns released attempts and their total count.
+// IncludeRejected opts into local rejections. Both arms filter on creation time;
+// ordering is newest release/rejection time, then creation time, kind and ID.
 func (s *Store) ListReleasedReservations(ctx context.Context, filter ReleasedReservationFilter) ([]ReleasedReservation, int64, error) {
 	limit := filter.Limit
 	if limit <= 0 {
 		limit = 20
 	}
-	where := []string{"r.status = 'released'"}
+	source := `SELECT id, caller_id, plugin_key_id, model, settlement_summary AS reason,
+		held_micro_usd, created_at_unix_ms, released_at_unix_ms,
+		released_at_unix_ms AS event_at_unix_ms, 'released' AS kind, '' AS request_id, 0 AS status_code
+		FROM reservations WHERE status = 'released'`
+	if filter.IncludeRejected {
+		source += ` UNION ALL SELECT request_id, caller_id, plugin_key_id, model,
+			reason_code || ': ' || reason, 0, created_at_unix_ms, NULL,
+			created_at_unix_ms, 'rejected', request_id, status_code FROM request_rejections`
+	}
+	where := []string{"1 = 1"}
 	args := make([]any, 0, 8)
 	if callerID := strings.TrimSpace(filter.CallerID); callerID != "" {
 		where = append(where, "r.caller_id = ?")
@@ -382,15 +396,16 @@ func (s *Store) ListReleasedReservations(ctx context.Context, filter ReleasedRes
 	clause := strings.Join(where, " AND ")
 
 	var total int64
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM reservations r WHERE `+clause, args...).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM (`+source+`) r WHERE `+clause, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count released reservations: %w", err)
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT r.id, r.plugin_key_id, COALESCE(k.label, ''), r.model,
-		r.settlement_summary, r.held_micro_usd, r.created_at_unix_ms, r.released_at_unix_ms
-		FROM reservations r
+		r.reason, r.held_micro_usd, r.created_at_unix_ms, r.released_at_unix_ms,
+		r.kind, r.request_id, r.status_code
+		FROM (`+source+`) r
 		LEFT JOIN plugin_keys k ON k.id = r.plugin_key_id
 		WHERE `+clause+`
-		ORDER BY r.released_at_unix_ms DESC, r.created_at_unix_ms DESC
+		ORDER BY r.event_at_unix_ms DESC, r.created_at_unix_ms DESC, r.kind ASC, r.id DESC
 		LIMIT ? OFFSET ?`, append(args, limit, max(filter.Offset, 0))...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list released reservations: %w", err)
@@ -402,7 +417,7 @@ func (s *Store) ListReleasedReservations(ctx context.Context, filter ReleasedRes
 		var created int64
 		var released sql.NullInt64
 		if err := rows.Scan(&item.ID, &item.PluginKeyID, &item.KeyLabel, &item.Model,
-			&item.Reason, &item.HeldMicroUSD, &created, &released); err != nil {
+			&item.Reason, &item.HeldMicroUSD, &created, &released, &item.Kind, &item.RequestID, &item.StatusCode); err != nil {
 			return nil, 0, err
 		}
 		item.CreatedAt = fromUnixMilli(created)

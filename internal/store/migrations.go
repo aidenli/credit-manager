@@ -573,6 +573,26 @@ var migrations = []migration{
 			FROM usage_statistics`,
 		},
 	},
+	{
+		version: 34,
+		name:    "local request rejection diagnostics",
+		up: []string{
+			// Attribution only: rejected requests never create financial records.
+			`CREATE TABLE request_rejections (
+				request_id TEXT PRIMARY KEY NOT NULL,
+				caller_id TEXT NOT NULL,
+				plugin_key_id TEXT NOT NULL,
+				model TEXT NOT NULL DEFAULT '',
+				reason_code TEXT NOT NULL,
+				reason TEXT NOT NULL DEFAULT '',
+				status_code INTEGER NOT NULL CHECK (status_code BETWEEN 400 AND 599),
+				created_at_unix_ms INTEGER NOT NULL
+			)`,
+			`CREATE INDEX request_rejections_created_idx ON request_rejections(created_at_unix_ms)`,
+			`CREATE INDEX request_rejections_key_created_idx ON request_rejections(plugin_key_id, created_at_unix_ms)`,
+			`CREATE INDEX request_rejections_caller_created_idx ON request_rejections(caller_id, created_at_unix_ms)`,
+		},
+	},
 }
 
 // Migrate applies every pending migration transactionally.

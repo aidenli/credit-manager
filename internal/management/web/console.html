@@ -574,7 +574,7 @@
     </div>
     <div class="card usage-recent-card">
       <div class="section-heading"><h2 class="panel-title"><span class="heading-icon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.4 14 13H2z"/><path d="M8 6.6v3.1M8 11.7v.1"/></svg></span>释放型失败</h2><span class="muted" id="usageReleasedCount"></span></div>
-      <p class="hint">预留后未结算、直接释放的尝试，不产生用量行。多数已被重试救回，只有最后一次尝试失败时客户端才会看到错误；原因里带的是上游原文。</p>
+      <p class="hint">包含预留后释放的失败尝试，以及插件直接拒绝的请求（如 Key 并发超限）。请求拒绝未预占、未扣费，不是退款；释放型失败可能已被重试救回。支持上方的密钥、模型和时间筛选；仅记录功能启用后的请求拒绝。</p>
       <div id="usageReleased"></div>
     </div>
     </div>

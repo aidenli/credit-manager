@@ -80,20 +80,20 @@ func usageSummary(ctx context.Context, svc *service.Service, query map[string][]
 	}), nil
 }
 
-// listReleasedUsage reports the attempts whose hold was released instead of
-// settled. They never reach the usage ledger, so before this endpoint a failed
-// attempt could only be found as a quota_released audit event, without the model
-// or the upstream error text the reason now carries.
+// listReleasedUsage combines released attempts and plugin-side rejections.
+// Rejections never held funds: kind=rejected and released_at=null keep them
+// distinct from actual releases, while retaining the existing console filters.
 func listReleasedUsage(ctx context.Context, svc *service.Service, query map[string][]string) (pluginapi.ManagementResponse, error) {
 	limit := queryInt(query, "limit", 20)
 	if limit > 200 {
 		limit = 200
 	}
 	filter := store.ReleasedReservationFilter{
-		CallerID:    firstQuery(query, "caller_id"),
-		PluginKeyID: firstQuery(query, "plugin_key_id"),
-		Model:       firstQuery(query, "model"),
-		Limit:       limit,
+		CallerID:        firstQuery(query, "caller_id"),
+		PluginKeyID:     firstQuery(query, "plugin_key_id"),
+		Model:           firstQuery(query, "model"),
+		Limit:           limit,
+		IncludeRejected: true,
 	}
 	var err error
 	if filter.From, err = queryTime(query, "from"); err != nil {
@@ -110,6 +110,9 @@ func listReleasedUsage(ctx context.Context, svc *service.Service, query map[stri
 	for _, item := range items {
 		view := map[string]any{
 			"id":             item.ID,
+			"kind":           item.Kind,
+			"request_id":     item.RequestID,
+			"status_code":    item.StatusCode,
 			"plugin_key_id":  item.PluginKeyID,
 			"key_label":      item.KeyLabel,
 			"model":          item.Model,

@@ -637,6 +637,11 @@ func TestConsoleShowsReleasedFailures(t *testing.T) {
 		"credit-manager/usage/released",
 		"释放型失败",
 		"reason_code",
+		"item.kind === 'rejected'",
+		"请求拒绝",
+		"未预占",
+		"item.request_id",
+		"item.status_code",
 	} {
 		if !strings.Contains(page, text) {
 			t.Fatalf("console is missing the released-attempt list: %q", text)

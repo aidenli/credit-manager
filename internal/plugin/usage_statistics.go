@@ -39,22 +39,38 @@ func interceptStatisticsRequest(svc *service.Service, raw []byte) ([]byte, error
 		return okEnvelope(quotaRejectResponse(http.StatusUnauthorized, err.Error()))
 	}
 	model := firstNonEmpty(req.RequestedModel, req.Model)
+	requestID := strings.TrimSpace(req.RequestID)
+	// Only authenticated, plugin-side rejections are recorded here. No body,
+	// headers, or upstream error payload is retained, and no hold is created.
+	reject := func(code, reason string, response pluginapi.RequestInterceptResponse) ([]byte, error) {
+		logCtx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		if err := svc.Store().RecordRequestRejection(logCtx, store.RequestRejection{
+			RequestID: requestID, CallerID: key.CallerID, PluginKeyID: key.ID,
+			Model: model, ReasonCode: code, Reason: reason, StatusCode: response.StatusCode,
+		}); err != nil {
+			// Observability must not replace the original rejection or allow traffic.
+			hostLog("warn", "credit-manager could not record request rejection", map[string]any{
+				"plugin_key_id": key.ID, "reason_code": code,
+			}, "")
+		}
+		return okEnvelope(response)
+	}
 	if !store.ModelAllowed(key, model) {
-		return okEnvelope(modelNotAllowedRejectResponse(store.ErrModelNotAllowed.Error()))
+		return reject("model_not_allowed", store.ErrModelNotAllowed.Error(), modelNotAllowedRejectResponse(store.ErrModelNotAllowed.Error()))
 	}
 	disabled, err := svc.ModelDisabled(ctx, model)
 	if err != nil {
-		return okEnvelope(quotaRejectResponse(http.StatusServiceUnavailable, "model policy unavailable"))
+		return reject("model_policy_unavailable", "model policy unavailable", quotaRejectResponse(http.StatusServiceUnavailable, "model policy unavailable"))
 	}
 	if disabled {
-		return okEnvelope(modelDisabledRejectResponse(store.ErrModelDisabled.Error()))
+		return reject("model_disabled", store.ErrModelDisabled.Error(), modelDisabledRejectResponse(store.ErrModelDisabled.Error()))
 	}
-	requestID := strings.TrimSpace(req.RequestID)
 	if requestID == "" {
-		return okEnvelope(quotaRejectResponse(http.StatusServiceUnavailable, "request identity unavailable"))
+		return reject("request_identity_unavailable", "request identity unavailable", quotaRejectResponse(http.StatusServiceUnavailable, "request identity unavailable"))
 	}
 	if !acquireKeySlot(requestID, key.ID, key.MaxConcurrentRequests) {
-		return okEnvelope(quotaRejectResponse(http.StatusTooManyRequests, store.ErrConcurrentLimit.Error()))
+		return reject("key_concurrency_limit", store.ErrConcurrentLimit.Error(), quotaRejectResponse(http.StatusTooManyRequests, store.ErrConcurrentLimit.Error()))
 	}
 	return okEnvelope(pluginapi.RequestInterceptResponse{})
 }

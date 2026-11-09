@@ -5005,21 +5005,20 @@
     renderUsagePagination(pageData);
   }
 
-  // renderReleasedUsage lists attempts that were released instead of settled.
-  // Retries hide most of them from the client, and the reason now carries the
-  // upstream text, which is the only record of what the client was told when the
-  // attempt was the last one.
+  // Released attempts and pre-execution rejections share the query, not the
+  // financial meaning: rejected rows must never look like a refund.
   function renderReleasedUsage() {
     const data = state.usageReleased || {};
     const items = data.items || [];
     const total = Number(data.total || items.length || 0);
     $('usageReleasedCount').textContent = total.toLocaleString() + ' ' + t('条记录');
     if (!items.length) {
-      $('usageReleased').innerHTML = '<div class="empty-state"><span>当前筛选条件下暂无释放型失败</span></div>';
+      $('usageReleased').innerHTML = '<div class="empty-state"><span>当前筛选条件下暂无释放型失败或请求拒绝</span></div>';
       return;
     }
-    $('usageReleased').innerHTML = '<div class="table-scroll"><table class="released-table"><thead><tr><th>时间</th><th>密钥</th><th>模型名称</th><th>原因</th><th>预占 '+esc(currencyCode())+'</th></tr></thead><tbody>' +
+    $('usageReleased').innerHTML = '<div class="table-scroll"><table class="released-table"><thead><tr><th>时间</th><th>密钥</th><th>模型名称</th><th>类型 / HTTP</th><th>原因</th><th>请求 ID</th><th>预占 '+esc(currencyCode())+'</th></tr></thead><tbody>' +
       items.map(item => {
+        const rejected = item.kind === 'rejected';
         const at = item.released_at || item.created_at;
         const code = String(item.reason_code || '').trim();
         const reason = String(item.reason || '').trim();
@@ -5030,8 +5029,10 @@
         return '<tr><td class="mono" title="'+esc(at || '')+'">'+esc(formatDateTime(at))+'</td>'+
           '<td>'+esc(item.key_label || item.plugin_key_id || '—')+'</td>'+
           '<td class="mono model" title="'+esc(item.model || '')+'">'+esc(item.model || '—')+'</td>'+
+          '<td>'+esc(rejected ? '请求拒绝' : '预占释放')+(item.status_code ? ' / '+esc(item.status_code) : '')+'</td>'+
           '<td class="released-reason" title="'+esc(reason)+'">'+(code ? '<span class="badge bad">'+esc(code)+'</span>' : '')+(shown ? '<span class="mono">'+esc(shown)+'</span>' : '')+'</td>'+
-          '<td title="'+esc(moneyTitle(item.held_micro_usd))+'">'+esc(formatMoney(item.held_micro_usd))+'</td></tr>';
+          '<td class="mono" title="'+esc(item.request_id || '')+'">'+esc(item.request_id || '—')+'</td>'+
+          (rejected ? '<td>未预占</td>' : '<td title="'+esc(moneyTitle(item.held_micro_usd))+'">'+esc(formatMoney(item.held_micro_usd))+'</td>')+'</tr>';
       }).join('') + '</tbody></table></div>' + (total > items.length ? '<p class="table-swipe-hint">仅显示最近 '+items.length+' 条，共 '+total.toLocaleString()+' 条</p>' : '');
   }
 

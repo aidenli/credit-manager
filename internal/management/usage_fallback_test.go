@@ -158,8 +158,35 @@ func TestReleasedUsageListsAttemptsWithReasons(t *testing.T) {
 	if reason, _ := item["reason"].(string); !strings.Contains(reason, "glm-5.3-flash") {
 		t.Fatalf("release reason lost the upstream text: %#v", item)
 	}
-	if item["key_label"] != "released" {
-		t.Fatalf("released key label = %#v", item["key_label"])
+	if item["key_label"] != "released" || item["kind"] != "released" {
+		t.Fatalf("released attribution = %#v", item)
+	}
+
+	if err := svc.Store().RecordRequestRejection(ctx, store.RequestRejection{
+		RequestID: "concurrency-request", CallerID: key.CallerID, PluginKeyID: key.ID,
+		Model: "gpt-6-luna", ReasonCode: "key_concurrency_limit",
+		Reason: store.ErrConcurrentLimit.Error(), StatusCode: 429,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resp, err = listReleasedUsage(ctx, svc, map[string][]string{"plugin_key_id": {key.ID}})
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("merged response=%+v err=%v", resp, err)
+	}
+	if err := json.Unmarshal(resp.Body, &page); err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 2 || len(page.Items) != 2 {
+		t.Fatalf("merged page=%+v", page)
+	}
+	var rejection map[string]any
+	for _, row := range page.Items {
+		if row["kind"] == "rejected" {
+			rejection = row
+		}
+	}
+	if rejection == nil || rejection["reason_code"] != "key_concurrency_limit" || rejection["status_code"] != float64(429) || rejection["request_id"] != "concurrency-request" || rejection["released_at"] != nil || rejection["held_micro_usd"] != float64(0) || rejection["key_label"] != "released" {
+		t.Fatalf("rejection view=%+v", rejection)
 	}
 
 	other, err := listReleasedUsage(ctx, svc, map[string][]string{"model": {"other-model"}})
