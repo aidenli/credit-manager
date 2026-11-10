@@ -91,6 +91,9 @@ func HandleMethod(method string, request []byte) ([]byte, error) {
 			return nil, err
 		}
 		return okEnvelope(pluginRegistration(negotiateRPCSchema(req.SchemaVersion)))
+	case pluginabi.MethodPluginQuiesce:
+		service.Quiesce()
+		return okEnvelope(map[string]any{})
 	case pluginabi.MethodFrontendAuthIdentifier:
 		return okEnvelope(map[string]string{"identifier": service.PluginID})
 	case pluginabi.MethodFrontendAuthAuthenticate:
@@ -117,7 +120,7 @@ func HandleMethod(method string, request []byte) ([]byte, error) {
 	case pluginabi.MethodSchedulerPick:
 		return pickAuth(request)
 	case pluginabi.MethodRequestInterceptBefore:
-		return okEnvelope(pluginapi.RequestInterceptResponse{})
+		return interceptRequestBeforeAuth(request)
 	case pluginabi.MethodRequestInterceptAfter:
 		return interceptRequestAfterAuth(request)
 	case pluginabi.MethodRequestComplete:

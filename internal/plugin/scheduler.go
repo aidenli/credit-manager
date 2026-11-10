@@ -4,11 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 
 	"github.com/yuluo688/credit-manager/internal/service"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
+
+// The deployed host supports explicit rejection; the pinned SDK predates these
+// fields. Keep the additive wire extension local rather than changing dependencies.
+type schedulerPickResponse struct {
+	AuthID       string
+	Handled      bool
+	Reject       bool
+	RejectCode   string
+	RejectReason string
+}
 
 func pickAuth(raw []byte) ([]byte, error) {
 	svc := service.Current()
@@ -17,6 +28,9 @@ func pickAuth(raw []byte) ([]byte, error) {
 	}
 	var req pluginapi.SchedulerPickRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
+		if svc.Config().AuthOnly {
+			return okEnvelope(schedulerPickResponse{Handled: true, Reject: true, RejectCode: "auth_unavailable", RejectReason: service.ErrAuthAdmission.Error()})
+		}
 		return nil, err
 	}
 	candidates := make([]service.AuthPickCandidate, 0, len(req.Candidates))
@@ -42,11 +56,17 @@ func pickAuth(raw []byte) ([]byte, error) {
 	}
 	if authID, handled, err := warmupTarget(req.Options.Headers, candidates); handled {
 		if err != nil {
+			if svc.Config().AuthOnly {
+				return okEnvelope(schedulerPickResponse{Handled: true, Reject: true, RejectCode: "auth_unavailable", RejectReason: "warmup_rejected: " + err.Error()})
+			}
 			return errorEnvelope("warmup_rejected", err.Error()), nil
 		}
 		return okEnvelope(pluginapi.SchedulerPickResponse{AuthID: authID, Handled: true})
 	}
 	ctx := service.WithSchedulerMetadata(context.Background(), req.Options.Metadata)
+	if svc.Config().AuthOnly {
+		ctx = service.WithAuthAdmission(ctx, http.Header(req.Options.Headers).Get(authAdmissionHeader), metadataString(req.Options.Metadata, "selection_id"))
+	}
 	authID, handled, decision, err := svc.PickAuthForKeyWithDecision(ctx, req.Options.Headers, candidates, req.Model)
 	if decision != nil {
 		// One JSON line survives host formatters that omit structured log fields.
@@ -56,6 +76,9 @@ func pickAuth(raw []byte) ([]byte, error) {
 		}
 	}
 	if err != nil {
+		if svc.Config().AuthOnly {
+			return okEnvelope(schedulerPickResponse{Handled: true, Reject: true, RejectCode: "auth_unavailable", RejectReason: authPickErrorCode(err) + ": " + err.Error()})
+		}
 		return errorEnvelope(authPickErrorCode(err), err.Error()), nil
 	}
 	return okEnvelope(pluginapi.SchedulerPickResponse{

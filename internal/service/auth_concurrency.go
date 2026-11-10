@@ -214,7 +214,7 @@ func (s *Service) AdmitAuth(ctx context.Context, reservationID string, auth stor
 }
 
 func (s *Service) PickAuth(ctx context.Context, candidates []AuthPickCandidate) (authID string, handled bool, err error) {
-	if s == nil || len(candidates) == 0 {
+	if s == nil {
 		return "", false, nil
 	}
 	limits, err := s.store.ListAuthConcurrencyLimits(ctx)
@@ -231,8 +231,12 @@ func (s *Service) PickAuth(ctx context.Context, candidates []AuthPickCandidate) 
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
 	s.ensureAuthPendingLocked()
+	previous, strict, admissionErr := s.prepareAuthAdmissionLocked(ctx, candidates)
+	if admissionErr != nil || previous != "" {
+		return previous, true, admissionErr
+	}
 	available, hasWarmupHold := s.filterAvailableAuthLocked(limits, candidates)
-	if !anyLimit && !hasWarmupHold {
+	if !strict && !anyLimit && !hasWarmupHold {
 		return "", false, nil
 	}
 	if len(available) == 0 {
@@ -243,7 +247,7 @@ func (s *Service) PickAuth(ctx context.Context, candidates []AuthPickCandidate) 
 		return "", true, store.ErrConcurrentLimit
 	}
 	chosen := s.nextWeightedAuthPickLocked("global", tier)
-	s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: strings.TrimSpace(chosen.ID), Provider: chosen.Provider})
+	s.bindPickedAuthLocked(ctx, chosen)
 	return strings.TrimSpace(chosen.ID), true, nil
 }
 
@@ -327,6 +331,10 @@ func (s *Service) pickAuthForKey(ctx context.Context, headers http.Header, candi
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
 	s.ensureAuthPendingLocked()
+	previous, _, admissionErr := s.prepareAuthAdmissionLocked(ctx, scoped)
+	if admissionErr != nil || previous != "" {
+		return previous, true, admissionErr
+	}
 	available, _ := s.filterAvailableAuthLocked(limits, scoped)
 	if len(available) == 0 {
 		if len(bindings) == 0 {
@@ -358,6 +366,7 @@ func (s *Service) pickAuthForKey(ctx context.Context, headers http.Header, candi
 	// Re-filtering on its historical status would starve it behind healthy peers.
 	now := time.Now()
 	chosen, reason := s.chooseBoundAuthLocked(key.ID+"\x00"+provider, provider, sessionID, strings.TrimSpace(model), available, now)
+	s.bindPickedAuthLocked(ctx, chosen)
 	if decision != nil {
 		s.captureSessionRoutingDecisionLocked(decision, ctx, headers, key.ID, model, reason, chosen, available, now)
 		decision.HostCandidateCount = len(candidates)
@@ -365,8 +374,10 @@ func (s *Service) pickAuthForKey(ctx context.Context, headers http.Header, candi
 		decision.ExcludedBusyCount = len(scoped) - availableCount
 		decision.ExcludedPriorityCount = availableCount - priorityCount
 		decision.ExcludedWeightCount = priorityCount - len(available)
+		if _, strict := ctx.Value(authAdmissionContextKey{}).(authAdmissionContext); strict {
+			decision.SelectedActiveRequests = s.activeAuthRequestsLocked(chosen.Provider, strings.TrimSpace(chosen.ID), "")
+		}
 	}
-	s.bindOldestUnattributedLocked(store.AuthIdentity{AuthID: strings.TrimSpace(chosen.ID), Provider: chosen.Provider})
 	return strings.TrimSpace(chosen.ID), true, nil
 }
 
@@ -582,6 +593,13 @@ func (s *Service) activeAuthRequestsLocked(provider, authID, exceptReservation s
 	provider = authLimitProvider(provider)
 	exceptReservation = strings.TrimSpace(exceptReservation)
 	var n int64
+	// ponytail: at most 16384 scalar entries under the shared lock; add indexed
+	// per-account counts only if profiling warrants the extra bookkeeping.
+	for _, admission := range s.authAdmissions {
+		if admission.authID == authID && (provider == "" || admission.provider == provider) {
+			n++
+		}
+	}
 	for id, pending := range s.authPending {
 		if pending == nil || !pending.active || !pending.hasAuth || id == exceptReservation {
 			continue

@@ -251,6 +251,8 @@
     keySearch: '',
     keyPagination: null,
     authQuotas: null,
+    authQuotaLoading: 0,
+    authQuotaCountsRequest: null,
     authQuotaWeeks: {},
     authQuotaCurrentWeeks: {},
     authQuotaRefreshing: {},
@@ -993,13 +995,14 @@
     if (p && id.indexOf(p + '/') !== 0) ids.add(p + '/' + id);
   }
 
-  async function api(method, path, body) {
+  async function api(method, path, body, signal) {
     const t = token();
     if (!t) throw new Error('请先填写并保存宿主管理密钥');
     const url = managementURL(path);
     assertSameOriginRequest(url);
     const opts = {
       method,
+      signal,
       headers: {
         'Authorization': 'Bearer ' + t,
         'Accept': 'application/json',
@@ -1773,6 +1776,7 @@
     document.querySelectorAll('.tabpane').forEach(pane => {
       pane.classList.toggle('hidden', pane.id !== 'tab-' + tab);
     });
+    cancelAuthQuotaCounts();
     state.currentTab = tab;
     if (tab === 'overview') requestAnimationFrame(resizeOverviewCharts);
     refreshActiveTab().catch(e => flash(e.message, false));
@@ -2448,6 +2452,7 @@
   }
 
   function clearLoadedSession() {
+    cancelAuthQuotaCounts();
     state.tabLoadSeq += 1;
     state.overview = null;
     state.keys = [];
@@ -5764,9 +5769,8 @@
       const refreshing = !!state.authQuotaRefreshing[itemKey];
       const warming = !!state.authQuotaWarming[itemKey];
       const maxConcurrent = Math.max(0, Number(authQuotaValue(item, 'max_concurrent_requests') || 0) || 0);
-      const activeRequests = Math.max(0, Number(authQuotaValue(item, 'active_requests') || 0) || 0);
       const concurrentValue = maxConcurrent > 0 ? String(maxConcurrent) : '';
-      const concurrentInput = '<div class="auth-quota-cost auth-quota-concurrency"><span class="auth-quota-concurrency-label"><span class="auth-quota-concurrency-icon" aria-hidden="true">'+authQuotaIcon('bolt')+'</span>'+esc(t('并发')+' · '+t('在途'))+'<b class="auth-quota-active'+(activeRequests > 0 ? ' is-active' : '')+'" title="在途请求数">'+String(activeRequests)+'</b></span><input class="auth-quota-concurrency-input" type="number" min="0" step="1" inputmode="numeric" placeholder="不限制" value="'+esc(concurrentValue)+'" data-provider="'+esc(authQuotaValue(item, 'provider') || '')+'" data-auth-id="'+esc(authQuotaValue(item, 'auth_id') || '')+'" data-auth-index="'+esc(authQuotaValue(item, 'auth_index') || '')+'" data-item-key="'+esc(itemKey)+'" title="最大并发请求数，0 或不填为不限制"></div>';
+      const concurrentInput = '<div class="auth-quota-cost auth-quota-concurrency"><span class="auth-quota-concurrency-label"><span class="auth-quota-concurrency-icon" aria-hidden="true">'+authQuotaIcon('bolt')+'</span>'+esc(t('并发')+' · '+t('在途'))+authQuotaActiveBadge(item)+'</span><input class="auth-quota-concurrency-input" type="number" min="0" step="1" inputmode="numeric" placeholder="不限制" value="'+esc(concurrentValue)+'" data-provider="'+esc(authQuotaValue(item, 'provider') || '')+'" data-auth-id="'+esc(authQuotaValue(item, 'auth_id') || '')+'" data-auth-index="'+esc(authQuotaValue(item, 'auth_index') || '')+'" data-item-key="'+esc(itemKey)+'" title="最大并发请求数，0 或不填为不限制"></div>';
       const warmup = authQuotaValue(item, 'warmup') || {};
       const warmupStatus = authQuotaWarmupStatus(warmup);
       const warmupBtn = '<button type="button" class="btn sm ghost auth-quota-warmup" data-provider="'+esc(authQuotaValue(item, 'provider') || '')+'" data-auth-id="'+esc(authQuotaValue(item, 'auth_id') || '')+'" data-auth-index="'+esc(authQuotaValue(item, 'auth_index') || '')+'" data-item-key="'+esc(itemKey)+'"'+(refreshing || warming ? ' disabled' : '')+' title="发送最小请求以提前启动额度窗口"><span>'+ (warming ? '预热中' : '预热') +'</span></button>';
@@ -5801,11 +5805,71 @@
     return '<p class="auth-quota-warmup-status is-'+esc(status)+'" title="'+esc(detail)+'"><span class="auth-quota-warmup-main"><span>'+esc(labels[status] || status)+'</span>'+(observed ? '<i class="auth-quota-warmup-observed">窗口已更新</i>' : '')+'</span>'+time+'</p>';
   }
 
+  function authQuotaActiveCount(item) {
+    const value = authQuotaValue(item, 'active_requests');
+    return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  function authQuotaActiveText(item) {
+    const count = authQuotaActiveCount(item);
+    return (count === null ? '—' : String(count)) + (item.activeRequestsStale || count === null ? ' · ' + t('缓存过期') : '');
+  }
+  function authQuotaActiveBadge(item) {
+    return '<b class="auth-quota-active'+(!item.activeRequestsStale && authQuotaActiveCount(item) > 0 ? ' is-active' : '')+'" data-provider="'+esc(authQuotaValue(item, 'provider') || '')+'" data-item-key="'+esc(authQuotaItemKey(item))+'" title="'+esc(t('当前并发量'))+'">'+esc(authQuotaActiveText(item))+'</b>';
+  }
+  function updateAuthQuotaCounts(result) {
+    const incoming = new Map((authQuotaValue(result, 'items') || []).map(item => [JSON.stringify([String(authQuotaValue(item, 'provider') || ''), authQuotaItemKey(item)]), item]));
+    const current = new Map();
+    (authQuotaValue(state.authQuotas, 'items') || []).forEach(item => {
+      const key = JSON.stringify([String(authQuotaValue(item, 'provider') || ''), authQuotaItemKey(item)]);
+      const count = authQuotaActiveCount(incoming.get(key));
+      item.activeRequestsStale = count === null;
+      if (count !== null) item.active_requests = count;
+      current.set(key, item);
+    });
+    const list = $('authQuotaList');
+    if (!list) return;
+    list.querySelectorAll('.auth-quota-active').forEach(badge => {
+      const item = current.get(JSON.stringify([badge.dataset.provider, badge.dataset.itemKey]));
+      if (!item) return;
+      badge.textContent = authQuotaActiveText(item);
+      badge.classList.toggle('is-active', !item.activeRequestsStale && authQuotaActiveCount(item) > 0);
+    });
+  }
+  function cancelAuthQuotaCounts() {
+    if (state.authQuotaCountsRequest) state.authQuotaCountsRequest.abort();
+  }
+  async function pollAuthQuotaCounts() {
+    if (document.hidden || state.currentTab !== 'auth-quotas' || !state.authQuotas || !token() || state.authQuotaLoading || state.authQuotaCountsRequest) return;
+    const controller = new AbortController();
+    state.authQuotaCountsRequest = controller;
+    const snapshot = state.authQuotas, seq = state.tabLoadSeq, query = authQuotaQuery(), sessionToken = token(), base = apiBase();
+    const current = () => !controller.signal.aborted && !document.hidden && state.currentTab === 'auth-quotas' && state.authQuotas === snapshot && state.tabLoadSeq === seq && authQuotaQuery() === query && token() === sessionToken && apiBase() === base;
+    const timeout = window.setTimeout(() => {
+      if (current()) updateAuthQuotaCounts(null);
+      controller.abort();
+    }, 10000);
+    try {
+      // Poll the cached GET only; never trigger upstream quota refreshes or replace editing controls.
+      const result = await api('GET', 'credit-manager/auth-quotas?' + query, undefined, controller.signal);
+      if (current()) updateAuthQuotaCounts(result);
+    } catch (_) {
+      if (current()) updateAuthQuotaCounts(null);
+    } finally {
+      window.clearTimeout(timeout);
+      if (state.authQuotaCountsRequest === controller) state.authQuotaCountsRequest = null;
+    }
+  }
   async function loadAuthQuotas() {
+    cancelAuthQuotaCounts();
     const seq = ++state.tabLoadSeq;
-    const result = await api('GET', 'credit-manager/auth-quotas?' + authQuotaQuery());
-    if (seq !== state.tabLoadSeq) return;
-    renderAuthQuotas(result);
+    state.authQuotaLoading += 1;
+    try {
+      const result = await api('GET', 'credit-manager/auth-quotas?' + authQuotaQuery());
+      if (seq !== state.tabLoadSeq) return;
+      renderAuthQuotas(result);
+    } finally {
+      state.authQuotaLoading -= 1;
+    }
   }
   function replaceAuthQuotaItem(item) {
     const current = state.authQuotas && typeof state.authQuotas === 'object' ? state.authQuotas : {};
@@ -7148,6 +7212,12 @@
       flash('统计筛选已清除', true);
     } catch (e) { flash(e.message, false); }
   });
+
+  document.addEventListener('visibilitychange', () => {
+    cancelAuthQuotaCounts();
+    if (!document.hidden) pollAuthQuotaCounts();
+  });
+  window.setInterval(pollAuthQuotaCounts, 5000);
 
   // boot
   restoreCustomAPIBasePreference();

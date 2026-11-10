@@ -27,19 +27,40 @@ func interceptStatisticsRequest(svc *service.Service, raw []byte) ([]byte, error
 		RequestID, RequestedModel, Model string
 		Headers                          http.Header
 		Metadata                         struct {
-			CallerScope string `json:"caller_scope"`
+			CallerScope          string `json:"caller_scope"`
+			SelectedAuthID       string `json:"selected_auth_id"`
+			AuthID               string `json:"auth_id"`
+			SelectedAuthProvider string `json:"selected_auth_provider"`
+			AuthProvider         string `json:"auth_provider"`
 		}
 	}
 	if err := json.Unmarshal(raw, &req); err != nil {
-		return nil, err
+		return admissionResponse(quotaRejectResponse(http.StatusServiceUnavailable, service.ErrAuthAdmission.Error()))
+	}
+	requestID := strings.TrimSpace(req.RequestID)
+	respond := func(response pluginapi.RequestInterceptResponse) ([]byte, error) {
+		if response.Terminate {
+			svc.CompleteAuthAdmission(requestID)
+			releaseKeySlot(requestID)
+		}
+		return admissionResponse(response)
+	}
+	auth := store.AuthIdentity{AuthID: firstNonEmpty(req.Metadata.SelectedAuthID, req.Metadata.AuthID), Provider: firstNonEmpty(req.Metadata.SelectedAuthProvider, req.Metadata.AuthProvider)}
+	if warmup, err := verifyWarmupAdmission(req.Headers, auth); warmup {
+		if err != nil {
+			return respond(quotaRejectResponse(http.StatusServiceUnavailable, err.Error()))
+		}
+		return respond(pluginapi.RequestInterceptResponse{})
+	}
+	if err := svc.VerifyAuthAdmission(requestID, req.Headers.Get(authAdmissionHeader), auth.AuthID, auth.Provider); err != nil {
+		return respond(quotaRejectResponse(http.StatusServiceUnavailable, err.Error()))
 	}
 	ctx := context.Background()
 	key, _, err := svc.ResolveIdentity(ctx, req.Headers, map[string]any{service.CallerScopeMetadataKey: req.Metadata.CallerScope})
 	if err != nil {
-		return okEnvelope(quotaRejectResponse(http.StatusUnauthorized, err.Error()))
+		return respond(quotaRejectResponse(http.StatusUnauthorized, err.Error()))
 	}
 	model := firstNonEmpty(req.RequestedModel, req.Model)
-	requestID := strings.TrimSpace(req.RequestID)
 	// Only authenticated, plugin-side rejections are recorded here. No body,
 	// headers, or upstream error payload is retained, and no hold is created.
 	reject := func(code, reason string, response pluginapi.RequestInterceptResponse) ([]byte, error) {
@@ -54,7 +75,7 @@ func interceptStatisticsRequest(svc *service.Service, raw []byte) ([]byte, error
 				"plugin_key_id": key.ID, "reason_code": code,
 			}, "")
 		}
-		return okEnvelope(response)
+		return respond(response)
 	}
 	if !store.ModelAllowed(key, model) {
 		return reject("model_not_allowed", store.ErrModelNotAllowed.Error(), modelNotAllowedRejectResponse(store.ErrModelNotAllowed.Error()))
@@ -72,7 +93,7 @@ func interceptStatisticsRequest(svc *service.Service, raw []byte) ([]byte, error
 	if !acquireKeySlot(requestID, key.ID, key.MaxConcurrentRequests) {
 		return reject("key_concurrency_limit", store.ErrConcurrentLimit.Error(), quotaRejectResponse(http.StatusTooManyRequests, store.ErrConcurrentLimit.Error()))
 	}
-	return okEnvelope(pluginapi.RequestInterceptResponse{})
+	return respond(pluginapi.RequestInterceptResponse{})
 }
 
 type statisticsTokenPart struct {

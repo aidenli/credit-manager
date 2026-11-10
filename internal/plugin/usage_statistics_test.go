@@ -52,7 +52,7 @@ func TestAuthOnlyRejectionsVisibleWithoutFinancialRecords(t *testing.T) {
 		t.Helper()
 		raw, _ := json.Marshal(map[string]any{
 			"RequestID": id, "RequestedModel": model, "Model": "upstream-model",
-			"Headers": http.Header{"Authorization": {"Bearer " + plain.Plaintext}},
+			"Headers": preparedAdmissionTest(t, id, http.Header{"Authorization": {"Bearer " + plain.Plaintext}}),
 			"Body":    "SECRET BODY NOT BASE64", "Metadata": map[string]any{"secret": "PRIVATE METADATA"},
 		})
 		response, err := interceptRequestAfterAuth(raw)
@@ -163,6 +163,7 @@ func TestAuthOnlyStatisticsNoBodyNoImageHoldAndPermissions(t *testing.T) {
 	request := map[string]any{"RequestID": "statistics-image-request", "SourceFormat": "openai-image", "Model": "gpt-image-1", "RequestedModel": "gpt-image-1", "Headers": http.Header{"Authorization": []string{"Bearer " + plain.Plaintext}}, "Body": "NOT BASE64", "Metadata": map[string]any{"body": strings.Repeat("x", 1000)}}
 	call := func() pluginapi.RequestInterceptResponse {
 		t.Helper()
+		request["Headers"] = preparedAdmissionTest(t, request["RequestID"].(string), request["Headers"].(http.Header))
 		raw, _ := json.Marshal(request)
 		response, err := interceptRequestAfterAuth(raw)
 		if err != nil {

@@ -28,7 +28,7 @@ func TestPickAuthForwardsFallbackPriority(t *testing.T) {
 			{"ID": "higher", "Provider": magpieProvider, "Priority": -1},
 		},
 	})
-	out, err := pickAuth(raw)
+	out, err := pickAuthWithLifecycleTest(t, raw)
 	if err != nil || !strings.Contains(string(out), `"AuthID":"higher"`) {
 		t.Fatalf("scheduler dropped priority: %s, %v", out, err)
 	}
@@ -64,7 +64,7 @@ func TestPickAuthUsesHostSessionMetadata(t *testing.T) {
 				{"ID": "account-2", "Provider": "codex", "Priority": 2},
 			},
 		})
-		out, err := pickAuth(raw)
+		out, err := pickAuthWithLifecycleTest(t, raw)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -119,7 +119,7 @@ func TestPickAuthUsesHostCredentialWeight(t *testing.T) {
 				{"ID": "account-2", "Provider": "codex", "Priority": 2, "Attributes": map[string]string{"weight": weight2}},
 			},
 		})
-		out, err := pickAuth(raw)
+		out, err := pickAuthWithLifecycleTest(t, raw)
 		if err != nil {
 			t.Fatal(err)
 		}

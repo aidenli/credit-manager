@@ -48,7 +48,7 @@ func TestPickAuthSessionRoutingLogIsOptionalAndBestEffort(t *testing.T) {
 				"Model": "gpt-5", "Options": map[string]any{"Headers": map[string][]string{"Authorization": {"Bearer " + material.Plaintext}, "Session-Id": {"private-chat"}}},
 				"Candidates": []map[string]any{{"ID": "private-account", "Provider": "codex"}},
 			})
-			out, err := pickAuth(raw)
+			out, err := pickAuthWithLifecycleTest(t, raw)
 			if err != nil || !strings.Contains(string(out), `"AuthID":"private-account"`) {
 				t.Fatalf("logging changed routing result: %s %v", out, err)
 			}
@@ -121,7 +121,7 @@ func TestPickAuthForwardsCandidateStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := pickAuth(raw)
+	out, err := pickAuthWithLifecycleTest(t, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestPickAuthUsesErroredBoundAccountNotUnboundSibling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := pickAuth(raw)
+	out, err := pickAuthWithLifecycleTest(t, raw)
 	if err != nil {
 		t.Fatal(err)
 	}

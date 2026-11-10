@@ -35,6 +35,8 @@ type SessionRoutingDecision struct {
 	ChosenAuthHash      string `json:"chosen_auth_hash"`
 	ChosenProvider      string `json:"chosen_provider"`
 	ChosenWeight        int64  `json:"chosen_weight"`
+	// Includes the newly held logical attempt; omitted outside strict auth_only admission.
+	SelectedActiveRequests int64 `json:"selected_active_requests,omitempty"`
 	// Exclusion counts cover plugin filters only; the host already filtered eligibility.
 	HostCandidateCount    int                  `json:"host_candidate_count"`
 	ExcludedScopeCount    int                  `json:"excluded_scope_count"` // invalid, disabled, or unauthorized

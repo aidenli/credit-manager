@@ -131,6 +131,7 @@ func completeInterceptedRequest(raw []byte) ([]byte, error) {
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, err
 		}
+		svc.CompleteAuthAdmission(req.RequestID)
 		releaseKeySlot(strings.TrimSpace(req.RequestID))
 		return okEnvelope(map[string]any{})
 	}
@@ -140,6 +141,8 @@ func completeInterceptedRequest(raw []byte) ([]byte, error) {
 	}
 	completeStreamLifecycle(req)
 	requestID := strings.TrimSpace(req.RequestID)
+	// Reconfigure may have changed modes while this lifecycle was in flight.
+	svc.CompleteAuthAdmission(requestID)
 	releaseKeySlot(requestID)
 	imageHoldsMu.Lock()
 	hold, ok := imageHolds[requestID]

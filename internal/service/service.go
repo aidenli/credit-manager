@@ -17,7 +17,7 @@ import (
 const (
 	PluginID      = "credit-manager"
 	PluginName    = "CPA Credit Manager"
-	PluginVersion = "1.8.39"
+	PluginVersion = "1.8.40"
 	// CallerScopeMetadataKey mirrors sdk/cliproxy/executor.CallerScopeMetadataKey.
 	CallerScopeMetadataKey = "caller_scope"
 )
@@ -31,6 +31,8 @@ type Service struct {
 	store              *store.Store
 	authMu             authMutex
 	authCond           *sync.Cond
+	authAdmissions     map[string]authAdmission
+	lastAdmissionSweep time.Time
 	authPending        map[string]*pendingAuthCapture
 	warmupHolds        map[string]store.AuthIdentity
 	cleanupMu          sync.Mutex
@@ -106,6 +108,30 @@ func Shutdown() {
 	}
 }
 
+// QuiesceDrainTimeout bounds how long a hot reload waits for in-flight auth-only
+// admissions to complete before releasing the store for the replacement plugin.
+var QuiesceDrainTimeout = 5 * time.Second
+
+// Quiesce prepares this plugin instance to be replaced (host plugin.quiesce): it
+// stops background loops, drains in-flight admissions for a bounded window, then
+// shuts the service down so a replacement can open the database. The in-memory
+// admission map is process-local, so a later fresh Open always starts at zero. A
+// completion callback lost past the drain window is reclaimed by the zombie TTL
+// sweep or, at the latest, by the next process restart. Safe to call repeatedly.
+func Quiesce() {
+	svc := Current()
+	if svc == nil {
+		return
+	}
+	svc.StopAuthWarmup()
+	svc.StopOAuthTestScheduler()
+	deadline := time.Now().Add(QuiesceDrainTimeout)
+	for time.Now().Before(deadline) && svc.ActiveAuthAdmissionCount() > 0 {
+		time.Sleep(50 * time.Millisecond)
+	}
+	Shutdown()
+}
+
 func Open(ctx context.Context, cfg config.Config) (*Service, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -125,7 +151,7 @@ func Open(ctx context.Context, cfg config.Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	svc := &Service{cfg: cfg, peppers: peppers, store: st, authPending: make(map[string]*pendingAuthCapture), warmupHolds: make(map[string]store.AuthIdentity)}
+	svc := &Service{cfg: cfg, peppers: peppers, store: st, authAdmissions: make(map[string]authAdmission), authPending: make(map[string]*pendingAuthCapture), warmupHolds: make(map[string]store.AuthIdentity)}
 	svc.authMu.init()
 	svc.authCond = sync.NewCond(&svc.authMu)
 	if err := svc.ensureBootstrap(ctx); err != nil {
@@ -211,7 +237,7 @@ func Configure(ctx context.Context, rawYAML []byte) error {
 			return fmt.Errorf("changing database path while CPA is running is not supported; restart CPA first")
 		}
 		// Keep the locked SQLite writer. Opening a second handle deadlocks on *.db.lock.
-		next := &Service{cfg: cfg, peppers: peppers, store: old.store, authCond: old.authCond, authPending: old.authPending, warmupHolds: old.warmupHolds}
+		next := &Service{cfg: cfg, peppers: peppers, store: old.store, authCond: old.authCond, authAdmissions: old.authAdmissions, authPending: old.authPending, warmupHolds: old.warmupHolds}
 		next.statistics = old.statistics
 		next.authMu.shared = old.authMu.shared
 		next.SetAuthQuotaSource(old.authQuotaSourceValue())
@@ -245,7 +271,7 @@ func Configure(ctx context.Context, rawYAML []byte) error {
 	if err != nil {
 		return err
 	}
-	svc := &Service{cfg: cfg, peppers: peppers, store: st, authPending: make(map[string]*pendingAuthCapture), warmupHolds: make(map[string]store.AuthIdentity)}
+	svc := &Service{cfg: cfg, peppers: peppers, store: st, authAdmissions: make(map[string]authAdmission), authPending: make(map[string]*pendingAuthCapture), warmupHolds: make(map[string]store.AuthIdentity)}
 	svc.authMu.init()
 	svc.authCond = sync.NewCond(&svc.authMu)
 	if err := svc.ensureBootstrap(ctx); err != nil {
